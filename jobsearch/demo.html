@@ -96,6 +96,17 @@
   }
   h1 { font-size: 1.5rem; font-weight: 700; margin: 0; text-wrap: balance; }
   .sub { color: var(--ink-muted); font-size: 0.9rem; max-width: 62ch; }
+  .notice {
+    background: var(--accent-soft);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    padding: 0.6rem 0.85rem;
+    font-size: 0.82rem;
+    color: var(--ink);
+    max-width: 68ch;
+    margin: 0.2rem 0 0;
+  }
 
   .toolbar {
     display: flex; flex-wrap: wrap; gap: 0.6rem;
@@ -216,6 +227,7 @@
     <span class="eyebrow">サンプルデータによるデモ・実データは含みません</span>
     <h1>案件検索デモ</h1>
     <p class="sub">6社（BN・NK・WI・HRプロビジョン・WT・平山）の求人シートを共通フォーマットに正規化し、横断検索できるようにしたプロトタイプです。表示中のデータはすべてダミーです。</p>
+    <p class="notice">表示している内容は候補案件を素早く見つけるための概要です。うまく正規化できなかった項目は空欄のままにしています。正式な応募条件・最新の空き状況は、必ず元の案件シートでご確認ください。</p>
   </header>
 
   <div class="toolbar">
