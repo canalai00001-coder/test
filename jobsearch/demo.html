@@ -221,8 +221,11 @@
   <div class="toolbar">
     <input type="search" id="q" placeholder="フリーワード検索（職種・勤務先・備考など）">
     <select id="company"><option value="">会社：すべて</option></select>
+    <select id="region"><option value="">エリア：すべて</option></select>
     <select id="prefecture"><option value="">都道府県：すべて</option></select>
+    <select id="gender"><option value="">性別：すべて</option></select>
     <select id="employment_type"><option value="">雇用形態：すべて</option></select>
+    <select id="min_income"><option value="">月収：指定なし</option></select>
   </div>
 
   <div class="status-row">
@@ -241,14 +244,65 @@
 <script>
 const JOBS = [{"company":"BN","job_no":"90001-01","employment_type":"派遣","job_title":"自動車部品の組立・検査","job_detail":null,"prefecture":"北海道","workplace":"サンプル製作所 札幌工場","workplace_address":"北海道サンプル市1-1","nearest_station":"サンプル駅","wage_type":null,"wage_text":"1500円／時","wage_yen":1500,"monthly_income_text":"240000","monthly_income_yen":240000,"referral_fee_text":"30万円","referral_fee_yen":300000,"gender":"男女不問","age_text":"18~40","age_min_text":null,"age_max_text":null,"holiday":"土日休み","shift":"2交替","work_hours_text":"日勤専属","dorm_available":null,"dorm_fee_text":"無料","commute_fee_text":"全額支給","commute_method":"徒歩15分","foreign_ok":"可","tattoo_ok":"不可","interview_deadline":null,"start_date":null,"remarks":"特になし","extra":{"管轄会社":"BNX（サンプル）","優先":"B","（採）拠点":"(採)札幌","募集人数":"2名","labeled":{"必要資格":"・未経験OK ※40歳まで","契約期間":"・3ヶ月更新","試用期間":"・2週間(1500円／時)"},"月収例内訳":"基本給+諸手当","年収目安":"2880000","寮形態":"個室寮","色弱":"可","カップル":"応相談","サイズ制限":"規定内","特約事項（定着）":"なし","備考（紹介料・特約事項）":"規定通り","面接〆切":"随時","赴任日":"応相談","入社日":"応相談","選考に かかる日数":"3日","最終紹介日⇒入社日":"7日"}},{"company":"BN","job_no":"90002-01","employment_type":"無期雇用派遣","job_title":"食品の検品・梱包","job_detail":null,"prefecture":"福岡県","workplace":"サンプル食品 福岡工場","workplace_address":"福岡県サンプル市2-2","nearest_station":"サンプル駅","wage_type":null,"wage_text":"1400円／時","wage_yen":1400,"monthly_income_text":"230000","monthly_income_yen":230000,"referral_fee_text":"25万円","referral_fee_yen":250000,"gender":"女性のみ","age_text":"20~50","age_min_text":null,"age_max_text":null,"holiday":"シフト制","shift":"3交替","work_hours_text":"3交替","dorm_available":null,"dorm_fee_text":"寮なし","commute_fee_text":"上限15000円","commute_method":"バス10分","foreign_ok":"不可","tattoo_ok":"応相談","interview_deadline":null,"start_date":null,"remarks":"車通勤可","extra":{"管轄会社":"BNX（サンプル）","優先":"C","（採）拠点":"(採)福岡","募集人数":"1名","labeled":{"必要資格":"・特になし","契約期間":"・無期雇用","試用期間":"・1ヶ月(基本給と同額)"},"月収例内訳":"基本給+夜勤手当","年収目安":"2760000","色弱":"不問","カップル":"不可","サイズ制限":"規定内","特約事項（定着）":"あり","備考（紹介料・特約事項）":"規定通り","面接〆切":"随時","赴任日":"応相談","入社日":"応相談","選考に かかる日数":"5日","最終紹介日⇒入社日":"10日"}},{"company":"HRプロビジョン","job_no":"90101","employment_type":"無期雇用派遣","job_title":"軽自動車の組立・塗装","job_detail":null,"prefecture":"大分県","workplace":"サンプル工業 大分工場","workplace_address":"大分県サンプル市3-3","nearest_station":"サンプル駅","wage_type":null,"wage_text":"1450円／時","wage_yen":1450,"monthly_income_text":"235000","monthly_income_yen":235000,"referral_fee_text":"40万円","referral_fee_yen":400000,"gender":"不問","age_text":"18~45","age_min_text":null,"age_max_text":null,"holiday":"土日休み","shift":"交替制","work_hours_text":"交替制","dorm_available":null,"dorm_fee_text":"無料","commute_fee_text":"支給なし","commute_method":"徒歩","foreign_ok":null,"tattoo_ok":null,"interview_deadline":null,"start_date":null,"remarks":"特になし","extra":{"管轄会社":"HRプロビジョン","募集人数":"3","labeled":{"必要資格":"・特になし","契約期間":"・無期雇用","試用期間":"・2週間(金額変動なし)"},"月収例内訳":"基本給のみ","寮形態":"個室寮あり","カップル":"可","サイズ制限":"規定内","特約事項":"規定通り","面接〆切":"随時","赴任日":"応相談","入社日":"応相談","選考日数":"7日"}},{"company":"HRプロビジョン","job_no":"90102","employment_type":"有期雇用派遣","job_title":"蓄電池の組付け・検品","job_detail":null,"prefecture":"愛知県","workplace":"サンプル電池 三重工場","workplace_address":"三重県サンプル市4-4","nearest_station":"サンプル駅","wage_type":null,"wage_text":"1380円／時","wage_yen":1380,"monthly_income_text":"225000","monthly_income_yen":225000,"referral_fee_text":"45万円","referral_fee_yen":450000,"gender":"男女不問","age_text":"20~50","age_min_text":null,"age_max_text":null,"holiday":"土日休み","shift":"日勤","work_hours_text":"日勤","dorm_available":null,"dorm_fee_text":"寮なし","commute_fee_text":"一部支給","commute_method":"バス","foreign_ok":null,"tattoo_ok":null,"interview_deadline":null,"start_date":null,"remarks":"特になし","extra":{"管轄会社":"HRプロビジョン","優先":"●","募集人数":"2","labeled":{"必要資格":"・未経験可 学歴不問","契約期間":"・3ヶ月更新","試用期間":"・2週間(金額変動なし)"},"月収例内訳":"基本給のみ","カップル":"可","サイズ制限":"規定内","特約事項":"規定通り","面接〆切":"随時","赴任日":"応相談","入社日":"応相談","選考日数":"7日"}},{"company":"NK","job_no":"700001","employment_type":"派遣社員","job_title":"施設の運転管理・点検業務","job_detail":null,"prefecture":null,"workplace":"サンプル環境センター","workplace_address":"千葉県サンプル市","nearest_station":"サンプル駅","wage_type":null,"wage_text":"1800円／時","wage_yen":1800,"monthly_income_text":"306000","monthly_income_yen":306000,"referral_fee_text":"280000","referral_fee_yen":280000,"gender":"男性","age_text":null,"age_min_text":"22","age_max_text":"50","holiday":"土日","shift":"日勤","work_hours_text":null,"dorm_available":null,"dorm_fee_text":null,"commute_fee_text":"上限15000円","commute_method":null,"foreign_ok":null,"tattoo_ok":"不可","interview_deadline":null,"start_date":null,"remarks":null,"extra":{"PRポイント1":"未経験歓迎","キャッチコピー":"安定の官公庁案件","社員食堂":"あり"}},{"company":"NK","job_no":"700002","employment_type":"派遣社員","job_title":"建築現場の施工管理補助","job_detail":null,"prefecture":null,"workplace":"サンプル建設","workplace_address":"東京都サンプル区","nearest_station":"サンプル駅","wage_type":null,"wage_text":"1900円／時","wage_yen":1900,"monthly_income_text":"320000","monthly_income_yen":320000,"referral_fee_text":"260000","referral_fee_yen":260000,"gender":"不問","age_text":null,"age_min_text":"25","age_max_text":"55","holiday":"５勤２休","shift":"日勤","work_hours_text":null,"dorm_available":null,"dorm_fee_text":null,"commute_fee_text":"実費支給","commute_method":null,"foreign_ok":null,"tattoo_ok":"応相談","interview_deadline":null,"start_date":null,"remarks":null,"extra":{"PRポイント1":"経験者優遇","キャッチコピー":"大手ゼネコン案件","社員食堂":"なし"}},{"company":"WI","job_no":"90201-00","employment_type":"派遣社員","job_title":"自動車エンジンの組立・検査","job_detail":null,"prefecture":null,"workplace":null,"workplace_address":"群馬県サンプル市1-1（サンプル工場）","nearest_station":"サンプル駅","wage_type":null,"wage_text":"1600","wage_yen":1600,"monthly_income_text":"203000","monthly_income_yen":203000,"referral_fee_text":"203000","referral_fee_yen":203000,"gender":"不問","age_text":null,"age_min_text":null,"age_max_text":"45","holiday":"土日","shift":"2交替","work_hours_text":null,"dorm_available":null,"dorm_fee_text":"〇","commute_fee_text":null,"commute_method":null,"foreign_ok":"可","tattoo_ok":"応相談","interview_deadline":"毎週金曜","start_date":"随時","remarks":"定着ボーナスあり","extra":{"7月紹介料":"203000","クライアント":"サンプル自動車","工場見学":"あり"}},{"company":"WI","job_no":"90202-00","employment_type":"派遣社員","job_title":"精密部品の加工・搬送","job_detail":null,"prefecture":null,"workplace":null,"workplace_address":"三重県サンプル市2-2","nearest_station":"サンプル駅","wage_type":null,"wage_text":"1550","wage_yen":1550,"monthly_income_text":"198000","monthly_income_yen":198000,"referral_fee_text":"195000","referral_fee_yen":195000,"gender":"男性","age_text":null,"age_min_text":null,"age_max_text":"50","holiday":"土日","shift":"日勤","work_hours_text":null,"dorm_available":null,"dorm_fee_text":"〇","commute_fee_text":null,"commute_method":null,"foreign_ok":"不問","tattoo_ok":"不可","interview_deadline":"毎週金曜","start_date":"随時","remarks":null,"extra":{"7月紹介料":"195000","クライアント":"サンプル精機","工場見学":"なし"}},{"company":"WT","job_no":"90301","employment_type":"派遣社員","job_title":"産業機械部品","job_detail":"部品塗装・検査・梱包","prefecture":"関西","workplace":"サンプル重工","workplace_address":"兵庫県サンプル市1-1","nearest_station":"サンプル駅","wage_type":null,"wage_text":"1600","wage_yen":1600,"monthly_income_text":"280000","monthly_income_yen":280000,"referral_fee_text":"250000","referral_fee_yen":250000,"gender":"不問","age_text":null,"age_min_text":null,"age_max_text":"55","holiday":"土日","shift":null,"work_hours_text":null,"dorm_available":"あり","dorm_fee_text":"無料","commute_fee_text":null,"commute_method":null,"foreign_ok":"応相談","tattoo_ok":"応相談","interview_deadline":null,"start_date":null,"remarks":null,"extra":{"社員食堂":"あり","空調":"あり"}},{"company":"WT","job_no":"90302","employment_type":"正社員（無期雇用派遣）","job_title":"物流機器","job_detail":"倉庫内マシンオペレーター","prefecture":"東北","workplace":"サンプル物流","workplace_address":"岩手県サンプル市2-2","nearest_station":"サンプル駅","wage_type":null,"wage_text":"290000","wage_yen":290000,"monthly_income_text":"290000","monthly_income_yen":290000,"referral_fee_text":"270000","referral_fee_yen":270000,"gender":"不問","age_text":null,"age_min_text":null,"age_max_text":"50","holiday":"土日","shift":null,"work_hours_text":null,"dorm_available":"あり","dorm_fee_text":"1万円","commute_fee_text":null,"commute_method":null,"foreign_ok":"応相談","tattoo_ok":"応相談","interview_deadline":null,"start_date":null,"remarks":null,"extra":{"社員食堂":"なし","空調":"なし"}},{"company":"平山","job_no":"hr9001","employment_type":null,"job_title":"船舶修繕の溶接補助","job_detail":null,"prefecture":null,"workplace":"サンプル造船","workplace_address":"広島県サンプル市因島","nearest_station":null,"wage_type":"時給","wage_text":"1899円","wage_yen":1899,"monthly_income_text":"248535円","monthly_income_yen":248535,"referral_fee_text":null,"referral_fee_yen":null,"gender":"男","age_text":null,"age_min_text":null,"age_max_text":"45","holiday":"土日","shift":"日勤","work_hours_text":"08:00～17:00","dorm_available":null,"dorm_fee_text":"30000円","commute_fee_text":null,"commute_method":null,"foreign_ok":"×","tattoo_ok":"可","interview_deadline":null,"start_date":null,"remarks":null,"extra":{"拠点":"広島","作業環境":"体力仕事＆屋外","カップル・家族寮":"相談可"}},{"company":"平山","job_no":"yk9001","employment_type":null,"job_title":"自動車部品の組立・検査","job_detail":null,"prefecture":null,"workplace":"サンプル自動車","workplace_address":"大分県サンプル市","nearest_station":null,"wage_type":"時給","wage_text":"1700円","wage_yen":1700,"monthly_income_text":"320000円","monthly_income_yen":320000,"referral_fee_text":null,"referral_fee_yen":null,"gender":"男","age_text":null,"age_min_text":null,"age_max_text":"40","holiday":"土日","shift":"2交替","work_hours_text":"6:30～15:10","dorm_available":null,"dorm_fee_text":"45000円","commute_fee_text":null,"commute_method":null,"foreign_ok":"相談可","tattoo_ok":"応相談","interview_deadline":null,"start_date":null,"remarks":null,"extra":{"拠点":"行橋","作業環境":"クリーンルーム作業あり","カップル・家族寮":"カップル・家族"}}];
 
+// Geographic order (north to south) — used to keep dropdown order sane
+// instead of a plain string sort, which scrambles Japanese place names.
 const PREFECTURES = ["北海道","青森県","岩手県","宮城県","秋田県","山形県","福島県","茨城県","栃木県","群馬県","埼玉県","千葉県","東京都","神奈川県","新潟県","富山県","石川県","福井県","山梨県","長野県","岐阜県","静岡県","愛知県","三重県","滋賀県","京都府","大阪府","兵庫県","奈良県","和歌山県","鳥取県","島根県","岡山県","広島県","山口県","徳島県","香川県","愛媛県","高知県","福岡県","佐賀県","長崎県","熊本県","大分県","宮崎県","鹿児島県","沖縄県"];
 
-function derivePrefecture(job) {
-  if (job.prefecture) return job.prefecture;
-  const addr = job.workplace_address || "";
-  for (const p of PREFECTURES) if (addr.startsWith(p) || addr.includes(p)) return p;
+const REGIONS = ["北海道","東北","関東","中部","近畿","中国","四国","九州・沖縄"];
+
+const PREF_TO_REGION = {};
+[
+  [["北海道"], "北海道"],
+  [["青森県","岩手県","宮城県","秋田県","山形県","福島県"], "東北"],
+  [["茨城県","栃木県","群馬県","埼玉県","千葉県","東京都","神奈川県"], "関東"],
+  [["新潟県","富山県","石川県","福井県","山梨県","長野県","岐阜県","静岡県","愛知県"], "中部"],
+  [["三重県","滋賀県","京都府","大阪府","兵庫県","奈良県","和歌山県"], "近畿"],
+  [["鳥取県","島根県","岡山県","広島県","山口県"], "中国"],
+  [["徳島県","香川県","愛媛県","高知県"], "四国"],
+  [["福岡県","佐賀県","長崎県","熊本県","大分県","宮崎県","鹿児島県","沖縄県"], "九州・沖縄"],
+].forEach(([prefs, region]) => prefs.forEach(p => PREF_TO_REGION[p] = region));
+
+// Some companies (e.g. WT) put a region nickname straight into the
+// "prefecture" column instead of an actual prefecture (e.g. "関西", "東北").
+// These get treated as a region-only signal, not a prefecture.
+const REGION_ALIASES = { "北海道":"北海道","東北":"東北","関東":"関東","中部":"中部","東海":"中部","近畿":"近畿","関西":"近畿","中国":"中国","四国":"四国","九州":"九州・沖縄" };
+
+function classifyLocation(job) {
+  const raw = job.prefecture;
+  let prefecture = null, region = null;
+  if (raw && PREF_TO_REGION[raw]) {
+    prefecture = raw;
+    region = PREF_TO_REGION[raw];
+  } else if (raw && REGION_ALIASES[raw]) {
+    region = REGION_ALIASES[raw];
+  }
+  if (!prefecture) {
+    const addr = job.workplace_address || "";
+    for (const p of PREFECTURES) {
+      if (addr.includes(p)) { prefecture = p; region = PREF_TO_REGION[p]; break; }
+    }
+  }
+  return { prefecture, region };
+}
+
+function normalizeGender(raw) {
+  if (!raw) return null;
+  const hasM = raw.includes("男");
+  const hasF = raw.includes("女");
+  if (hasM && hasF) return "不問";
+  if (hasM) return "男性";
+  if (hasF) return "女性";
+  if (raw.includes("不問") || raw.includes("応相談")) return "不問";
   return null;
 }
+
+const MIN_INCOME_STEPS = [150000, 200000, 250000, 300000, 350000, 400000];
+
+// Pre-compute derived fields once so filtering/rendering/faceting agree.
+JOBS.forEach(job => {
+  job._loc = classifyLocation(job);
+  job._gender = normalizeGender(job.gender);
+});
 
 const COMPANY_CHIP = {};
 const CHIP_CLASSES = ["chip-1","chip-2","chip-3","chip-4","chip-5","chip-6"];
@@ -269,16 +323,42 @@ function fillSelect(id, values) {
   }
 }
 
+function inCanonicalOrder(order, present) {
+  return order.filter(v => present.has(v));
+}
+
 function initFacets() {
   fillSelect("company", [...new Set(JOBS.map(j => j.company))].sort());
-  fillSelect("prefecture", [...new Set(JOBS.map(derivePrefecture).filter(Boolean))].sort());
+
+  const presentPrefs = new Set(JOBS.map(j => j._loc.prefecture).filter(Boolean));
+  fillSelect("prefecture", inCanonicalOrder(PREFECTURES, presentPrefs));
+
+  const presentRegions = new Set(JOBS.map(j => j._loc.region).filter(Boolean));
+  fillSelect("region", inCanonicalOrder(REGIONS, presentRegions));
+
+  const presentGenders = new Set(JOBS.map(j => j._gender).filter(Boolean));
+  fillSelect("gender", inCanonicalOrder(["男性","女性","不問"], presentGenders));
+
   fillSelect("employment_type", [...new Set(JOBS.map(j => j.employment_type).filter(Boolean))].sort());
+
+  const incomeEl = document.getElementById("min_income");
+  for (const yen of MIN_INCOME_STEPS) {
+    const opt = document.createElement("option");
+    opt.value = yen;
+    opt.textContent = (yen / 10000) + "万円以上";
+    incomeEl.appendChild(opt);
+  }
 }
 
 function matches(job, filters) {
   if (filters.company && job.company !== filters.company) return false;
-  if (filters.prefecture && derivePrefecture(job) !== filters.prefecture) return false;
+  if (filters.prefecture && job._loc.prefecture !== filters.prefecture) return false;
+  if (filters.region && job._loc.region !== filters.region) return false;
+  if (filters.gender && job._gender !== filters.gender) return false;
   if (filters.employment_type && job.employment_type !== filters.employment_type) return false;
+  if (filters.min_income) {
+    if (!job.monthly_income_yen || job.monthly_income_yen < filters.min_income) return false;
+  }
   if (filters.q) {
     const hay = [job.job_title, job.job_detail, job.workplace, job.remarks]
       .filter(Boolean).join(" ").toLowerCase();
@@ -294,9 +374,10 @@ function money(text, yen) {
 
 function renderCard(job) {
   const chipClass = COMPANY_CHIP[job.company] || "chip-1";
-  const pref = derivePrefecture(job) || "";
+  const { prefecture, region } = job._loc;
+  const locLabel = prefecture ? `${prefecture}（${region}）` : (region || "地域不明");
   const tags = [];
-  if (job.gender) tags.push(job.gender);
+  if (job._gender) tags.push(job._gender);
   if (job.age_max_text) tags.push("〜" + job.age_max_text + "歳");
   if (job.foreign_ok) tags.push("外国籍: " + job.foreign_ok);
   if (job.tattoo_ok) tags.push("タトゥー: " + job.tattoo_ok);
@@ -315,7 +396,7 @@ function renderCard(job) {
           <div class="wage-label">${job.wage_type ? escapeHtml(job.wage_type) : "給与"}</div>
         </div>
       </div>
-      <div class="loc"><strong>${escapeHtml(pref || "地域不明")}</strong>　${escapeHtml(job.workplace || job.workplace_address || "")}</div>
+      <div class="loc"><strong>${escapeHtml(locLabel)}</strong>　${escapeHtml(job.workplace || job.workplace_address || "")}</div>
       <dl class="facts">
         <dt>月収目安</dt><dd>${escapeHtml(money(job.monthly_income_text, job.monthly_income_yen))}</dd>
         <dt>紹介料</dt><dd>${job.referral_fee_yen ? escapeHtml(money(job.referral_fee_text, job.referral_fee_yen)) : "未設定"}</dd>
@@ -331,16 +412,22 @@ function render() {
   const filters = {
     q: document.getElementById("q").value.trim(),
     company: document.getElementById("company").value,
+    region: document.getElementById("region").value,
     prefecture: document.getElementById("prefecture").value,
+    gender: document.getElementById("gender").value,
     employment_type: document.getElementById("employment_type").value,
+    min_income: Number(document.getElementById("min_income").value) || null,
   };
   const results = JOBS.filter(j => matches(j, filters));
 
   document.getElementById("count").textContent = results.length;
   const parts = [];
   if (filters.company) parts.push(filters.company);
+  if (filters.region) parts.push(filters.region);
   if (filters.prefecture) parts.push(filters.prefecture);
+  if (filters.gender) parts.push(filters.gender);
   if (filters.employment_type) parts.push(filters.employment_type);
+  if (filters.min_income) parts.push((filters.min_income / 10000) + "万円以上");
   document.getElementById("filter-summary").textContent = parts.length ? parts.join(" / ") + " で絞り込み中" : "";
 
   const grid = document.getElementById("results");
@@ -354,7 +441,7 @@ function render() {
   }
 }
 
-["q", "company", "prefecture", "employment_type"].forEach(id => {
+["q", "company", "region", "prefecture", "gender", "employment_type", "min_income"].forEach(id => {
   document.getElementById(id).addEventListener("input", render);
 });
 
