@@ -1,0 +1,28 @@
+{
+  "company": "WT",
+  "template": "template_d",
+  "field_map": {
+    "job_no": "仕事No",
+    "workplace": "取引先企業",
+    "prefecture": "エリア",
+    "workplace_address": "就業場所住所",
+    "nearest_station": "最寄駅",
+    "employment_type": "雇用形態",
+    "job_title": "生産品目",
+    "job_detail": "仕事内容",
+    "gender": "性別",
+    "age_max_text": "受入年齢",
+    "foreign_ok": "外国籍",
+    "wage_text": ["時給", "月給"],
+    "monthly_income_text": "月収例",
+    "holiday": "休日",
+    "dorm_available": "寮の有無",
+    "dorm_fee_text": "寮費",
+    "tattoo_ok": "タトゥー",
+    "referral_fee_text": "紹介料（税抜）"
+  },
+  "labeled_text_fields": [],
+  "notes": {
+    "wage_text": "WT splits hourly (時給) and monthly (月給) pay into two columns; first non-empty wins"
+  }
+}

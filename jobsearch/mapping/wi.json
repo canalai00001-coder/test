@@ -1,0 +1,30 @@
+{
+  "company": "WI",
+  "template": "template_c",
+  "field_map": {
+    "job_no": "求人番号",
+    "job_title": "仕事内容",
+    "workplace_address": "勤務地 ※番地までの記載",
+    "nearest_station": "最寄り駅",
+    "wage_text": "時給OR月給",
+    "monthly_income_text": "月収例（交通費含まず）",
+    "shift": "シフト",
+    "holiday": "休日",
+    "age_max_text": "募集年齢 ※数字のみ",
+    "gender": "性別",
+    "foreign_ok": "外国籍受入れ",
+    "tattoo_ok": "TT",
+    "interview_deadline": "紹介締切",
+    "start_date": "次回 入社日",
+    "remarks": "備考・特記事項",
+    "employment_type": "雇用形態",
+    "dorm_fee_text": "寮費 無料"
+  },
+  "regex_field_map": [
+    ["^\\d{1,2}月紹介料$", "referral_fee_text"]
+  ],
+  "labeled_text_fields": [],
+  "notes": {
+    "referral_fee_text": "WI's fee column name embeds the current month (e.g. 7月紹介料 -> 8月紹介料 next month). Matched by regex instead of exact header name so this survives the monthly rename."
+  }
+}

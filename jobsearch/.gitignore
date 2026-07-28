@@ -1,0 +1,4 @@
+jobs.db
+real_data/
+__pycache__/
+*.pyc

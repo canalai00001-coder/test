@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>案件検索プロトタイプ</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; color: #222; }
+  h1 { font-size: 1.3rem; }
+  .filters { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .filters input, .filters select { padding: 0.4rem; font-size: 0.9rem; }
+  .filters input[type="text"] { flex: 1; min-width: 200px; }
+  #count { margin: 0.5rem 0; color: #555; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; font-size: 0.85rem; text-align: left; vertical-align: top; }
+  th { background: #f5f5f5; position: sticky; top: 0; }
+  tr:nth-child(even) { background: #fafafa; }
+  .job-title { max-width: 260px; }
+  .company-tag { display: inline-block; padding: 0.1rem 0.4rem; background: #e8f0fe; border-radius: 4px; font-size: 0.8rem; }
+</style>
+</head>
+<body>
+  <h1>案件検索プロトタイプ</h1>
+  <div class="filters">
+    <input type="text" id="q" placeholder="フリーワード（職種・勤務先など）">
+    <select id="company"><option value="">会社: すべて</option></select>
+    <select id="prefecture"><option value="">都道府県: すべて</option></select>
+    <select id="employment_type"><option value="">雇用形態: すべて</option></select>
+    <button id="search-btn">検索</button>
+  </div>
+  <div id="count"></div>
+  <table>
+    <thead>
+      <tr>
+        <th>会社</th><th>求人No</th><th>職種</th><th>勤務地</th><th>雇用形態</th>
+        <th>給与</th><th>月収目安</th><th>休日</th><th>紹介料</th>
+      </tr>
+    </thead>
+    <tbody id="results"></tbody>
+  </table>
+
+<script>
+async function loadFacets() {
+  const res = await fetch('/api/facets');
+  const data = await res.json();
+  fillSelect('company', data.companies);
+  fillSelect('prefecture', data.prefectures);
+  fillSelect('employment_type', data.employment_types);
+}
+
+function fillSelect(id, values) {
+  const el = document.getElementById(id);
+  for (const v of values) {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v;
+    el.appendChild(opt);
+  }
+}
+
+async function search() {
+  const params = new URLSearchParams();
+  const q = document.getElementById('q').value.trim();
+  const company = document.getElementById('company').value;
+  const prefecture = document.getElementById('prefecture').value;
+  const employment_type = document.getElementById('employment_type').value;
+  if (q) params.set('q', q);
+  if (company) params.set('company', company);
+  if (prefecture) params.set('prefecture', prefecture);
+  if (employment_type) params.set('employment_type', employment_type);
+
+  const res = await fetch('/api/jobs?' + params.toString());
+  const data = await res.json();
+  document.getElementById('count').textContent = `${data.total} 件`;
+
+  const tbody = document.getElementById('results');
+  tbody.innerHTML = '';
+  for (const job of data.items) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="company-tag">${escapeHtml(job.company || '')}</span></td>
+      <td>${escapeHtml(job.job_no || '')}</td>
+      <td class="job-title">${escapeHtml(job.job_title || '')}</td>
+      <td>${escapeHtml(job.prefecture || job.workplace_address || '')}</td>
+      <td>${escapeHtml(job.employment_type || '')}</td>
+      <td>${escapeHtml(job.wage_text || '')}</td>
+      <td>${escapeHtml(job.monthly_income_text || '')}</td>
+      <td>${escapeHtml(job.holiday || '')}</td>
+      <td>${escapeHtml(job.referral_fee_text || '')}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.getElementById('search-btn').addEventListener('click', search);
+document.getElementById('q').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
+
+loadFacets().then(search);
+</script>
+</body>
+</html>

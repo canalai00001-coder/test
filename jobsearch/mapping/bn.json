@@ -1,0 +1,31 @@
+{
+  "company": "BN",
+  "template": "template_a",
+  "field_map": {
+    "prefecture": "都道府県名",
+    "job_no": "求人No.",
+    "workplace": "企業名",
+    "employment_type": "形態",
+    "job_title": "職種",
+    "workplace_address": "勤務地",
+    "work_hours_text": "勤務時間",
+    "holiday": "休日",
+    "wage_text": "時給/日給",
+    "monthly_income_text": "月収目安",
+    "shift": "シフト",
+    "nearest_station": "最寄り駅",
+    "commute_method": "通勤手段",
+    "commute_fee_text": "交通費",
+    "dorm_fee_text": "寮費",
+    "age_text": "年齢",
+    "gender": "性別",
+    "tattoo_ok": "TT （和彫り不可）",
+    "foreign_ok": "外国籍",
+    "remarks": "案件備考",
+    "referral_fee_text": "紹介料"
+  },
+  "labeled_text_fields": ["資格"],
+  "notes": {
+    "tattoo_ok": "header is phrased as an NG-condition (和彫り不可) — value is not a simple OK/NG boolean, keep as raw text"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "company": "NK",
+  "template": "template_b",
+  "field_map": {
+    "job_no": "お仕事No",
+    "employment_type": "雇用形態",
+    "job_title": "作業内容",
+    "workplace": "作業所名",
+    "workplace_address": "勤務先",
+    "nearest_station": "勤務先最寄駅",
+    "shift": "シフト",
+    "holiday": "休日",
+    "age_min_text": "下限年齢",
+    "age_max_text": "上限年齢",
+    "monthly_income_text": "月収例",
+    "wage_text": "基本給",
+    "commute_fee_text": "通勤交通費上限",
+    "tattoo_ok": "刺青不可",
+    "gender": "性別",
+    "referral_fee_text": "紹介料"
+  },
+  "labeled_text_fields": [],
+  "notes": {
+    "tattoo_ok": "NG-condition column like BN's TT field, but different label wording (刺青不可 vs 和彫り不可) — same concept, do not assume same polarity as OK-oriented columns elsewhere"
+  }
+}

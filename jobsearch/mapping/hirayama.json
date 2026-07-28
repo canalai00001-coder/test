@@ -1,0 +1,25 @@
+{
+  "company": "平山",
+  "template": "template_e",
+  "field_map": {
+    "job_no": "仕事番号",
+    "workplace": "取引先名",
+    "workplace_address": "勤務地",
+    "job_title": "仕事内容",
+    "gender": "性別",
+    "age_max_text": "年齢  （上限）",
+    "shift": "シフト",
+    "work_hours_text": "勤務時間",
+    "holiday": "休日",
+    "wage_type": "給与区分",
+    "wage_text": "給与",
+    "monthly_income_text": "月収例",
+    "dorm_fee_text": "寮費補助額",
+    "foreign_ok": "外国籍",
+    "tattoo_ok": "タトゥー"
+  },
+  "labeled_text_fields": [],
+  "notes": {
+    "referral_fee_text": "no referral-fee column found on this sheet; leave unmapped for now (confirm with 平山 owner whether fee lives elsewhere)"
+  }
+}
