@@ -1,32 +1,47 @@
-"""Claude による内容チェック。
+"""Claude による原稿の中身のチェック。
 
-ルールでは拾えない「仕事内容と職種名が合っていない」「誤字」「求職者が読んで
-意味が通らない」「数字と文章の食い違い」などを見てもらう。
-AI は指摘だけを返し、値を勝手に直すことはしない。直すのは人。
+ルールでは拾えない「職種名と仕事内容のズレ」「タイトルと本文の食い違い」
+「キーワードが原稿の内容と合っていない」「誤字」などを見てもらう。
+AI は指摘だけを返し、シートを書き換えることはしない。
 """
 import json
 
 import anthropic
 
-from .validate import Issue
+from .checks import Issue
 
 MODEL = "claude-opus-5-5"
 
-SYSTEM = """あなたは人材派遣会社で求人原稿をチェックする担当者です。
-これから Q-mate に掲載する求人1件分のデータを渡します。掲載前の最終確認として、
-次の観点で問題を探してください。
+# AI に渡す列。応募フォームの設定や他媒体用の列は渡さない。
+REVIEW_COLUMNS = [
+    "雇用形態", "職種名", "求人ボックス用職種名", "職種カテゴリー(大分類)", "職種カテゴリー(中分類)",
+    "勤務地：都道府県", "勤務地：市区町村", "仕事内容", "応募資格・条件", "年齢制限の有無", "性別制限",
+    "給与形態", "給与_下限", "給与_上限", "基本給", "給与例", "勤務形態", "勤務時間",
+    "給与形態に応じた労働時間（日給・週給・月給・年俸のみ）", "休日休暇", "待遇・福利厚生",
+    "受動喫煙対策", "キャッチコピー", "選考フロー", "キーワードリスト（複数選択可）", "メモ",
+]
 
-- 項目同士の食い違い（職種名と仕事内容、給与と月収例、勤務時間とシフト、住所と最寄り駅など）
-- 誤字脱字、表記ゆれ、全角半角の混在で読みにくい箇所
-- 求職者が読んで意味が取れない、または誤解しそうな書き方
-- 求人広告として不適切な表現（差別的表現、根拠のない誇大表現、性別や年齢を限定する書き方）
-- 応募判断に必要なのに抜けている情報
+SYSTEM = """あなたは人材紹介会社で、求人媒体 Q-mate に入稿する求人原稿を最終チェックする担当者です。
+原稿は GAS でテンプレートから自動生成されたもので、1件ずつ渡します。入稿前に次の点を見てください。
 
-ルールで判定済みの指摘も渡します。同じ内容を繰り返す必要はありません。
-問題がなければ issues は空にしてください。細かすぎる好みの指摘はしないでください。
+- 項目同士の食い違い（職種名・求人ボックス用職種名・仕事内容・カテゴリーが同じ仕事を指しているか、
+  勤務時間の夜勤の有無とタイトルや待遇の書き方、給与例と給与の範囲、休日の日数の書き方など）
+- キーワードリストに、原稿の内容と合わない語が入っていないか（例：夜勤ありの原稿に「日勤のみ」系、
+  寮の記載がないのに「寮・社宅あり」など）。無駄クリックの原因になるため運用で削っています
+- テンプレートの差し込み漏れ（{ } や ○○ が残っている、別の勤務地や別職種の文が混ざっている）
+- 誤字脱字、文のつながりがおかしい箇所
+- 求人広告として問題のある表現（差別的表現、根拠のない誇大表現、性別や年齢を限定する書き方）
+
+運用ルール:
+- 求人ボックス用職種名には休日や待遇など原稿の中身を入れる方針です（無駄クリック対策）
+- 応募資格・勤務時間・休日・キャッチコピー・待遇と、重め/軽め以外の仕事内容では絵文字を使わず飾り紐にしています
+- 年間休日は120日表記です
+
+ルールで判定済みの指摘も渡すので、同じ内容は繰り返さないでください。
+問題がなければ issues は空にしてください。言い回しの好みのような細かい指摘は不要です。
 severity は、掲載すると誤った情報になるもの・法令上問題があるものを error、
 直したほうがよいものを warning、参考程度を info にしてください。
-field にはデータのキー名（job_no, title など）を入れ、どれにも当てはまらなければ "general" にしてください。"""
+column には上の列名をそのまま入れ、どれにも当てはまらなければ "全体" としてください。"""
 
 SCHEMA = {
     "type": "object",
@@ -37,11 +52,11 @@ SCHEMA = {
                 "type": "object",
                 "properties": {
                     "severity": {"type": "string", "enum": ["error", "warning", "info"]},
-                    "field": {"type": "string"},
+                    "column": {"type": "string"},
                     "message": {"type": "string"},
                     "suggestion": {"type": "string"},
                 },
-                "required": ["severity", "field", "message", "suggestion"],
+                "required": ["severity", "column", "message", "suggestion"],
                 "additionalProperties": False,
             },
         },
@@ -57,10 +72,10 @@ class AIReviewer:
         self.client = client or anthropic.Anthropic()
         self.model = model
 
-    def review(self, job: dict, labels: dict, rule_issues: list[Issue]) -> tuple[list[Issue], str]:
-        data = {k: {"項目名": labels.get(k, k), "値": v} for k, v in job.items()}
+    def review(self, row: dict, rule_issues: list[Issue]) -> tuple[list[Issue], str]:
+        data = {c: row[c] for c in REVIEW_COLUMNS if row.get(c, "").strip()}
         prompt = (
-            "## 求人データ\n" + json.dumps(data, ensure_ascii=False, indent=2) +
+            "## 原稿\n" + json.dumps(data, ensure_ascii=False, indent=2) +
             "\n\n## ルールで判定済みの指摘\n" +
             (json.dumps([i.to_dict() for i in rule_issues], ensure_ascii=False, indent=2)
              if rule_issues else "なし")
@@ -75,11 +90,11 @@ class AIReviewer:
             messages=[{"role": "user", "content": prompt}],
         )
         if response.stop_reason == "refusal":
-            return [Issue("error", "general", "AIチェックが実行できませんでした（refusal）。人の目で確認してください", "ai")], ""
+            return [Issue("error", "全体", "AIチェックが実行できませんでした（refusal）。人の目で確認してください", "ai")], ""
         if response.stop_reason == "max_tokens":
-            return [Issue("error", "general", "AIチェックの出力が途中で切れました。再実行してください", "ai")], ""
+            return [Issue("error", "全体", "AIチェックの出力が途中で切れました。再実行してください", "ai")], ""
         text = next(b.text for b in response.content if b.type == "text")
         result = json.loads(text)
-        issues = [Issue(i["severity"], i["field"], i["message"], "ai", i.get("suggestion", ""))
+        issues = [Issue(i["severity"], i["column"], i["message"], "ai", i.get("suggestion", ""))
                   for i in result["issues"]]
         return issues, result.get("summary", "")

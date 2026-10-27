@@ -1,0 +1,25 @@
+{
+  "_説明": "スプレッドシートと Q-mate の接続設定。ID・パスワードはここに書かず、環境変数 QMATE_ID / QMATE_PASSWORD に入れる。",
+  "spreadsheet_id": "1nPk9AG7wePhszTO4bcN8Rs_gFNJKjlj0YAFanz9ggK4",
+  "service_account_file": "service_account.json",
+  "output_sheet_prefix": "出力_",
+  "inspection_sheet": "検品シート",
+  "inspection_name_column": "シート名",
+  "inspection_verdict_column": "判定",
+  "inspection_ok_value": "✅OK",
+  "result_sheet": "AIチェック結果",
+  "csv": {"encoding": "utf-8", "newline": "\r\n"},
+  "qmate": {
+    "login_url": "https://m.q-mate.jp/user_sessions/new?layout=login",
+    "id_selectors": ["input[type='email']", "input[name*='email']", "input[name*='login']"],
+    "password_selectors": ["input[type='password']"],
+    "login_button_selectors": ["button[type='submit']", "input[type='submit']"],
+    "upload_url": "（CSV一括入稿ページのURL：画面を確認後に設定）",
+    "file_input_selector": "input[type='file']",
+    "upload_button_selector": "（取り込みボタンのセレクタ：画面を確認後に設定）",
+    "result_selector": "body",
+    "success_pattern": "（取り込み成功時に出る文言：画面を確認後に設定）",
+    "error_pattern": "エラー|失敗|不正|できません",
+    "timeout_ms": 60000
+  }
+}

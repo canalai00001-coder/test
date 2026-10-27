@@ -1,78 +1,184 @@
-"""AIチェックの結果の扱いと、投稿対象の絞り込みを確かめる（API は呼ばない）。"""
+"""AI チェック・入稿前の止め条件・Q-mate への入稿操作を確かめる。本物の API や Q-mate には接続しない。"""
 import json
+import os
+import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
+from qmate_agent import __main__ as cli
 from qmate_agent import config
-from qmate_agent.__main__ import select_targets
 from qmate_agent.ai_review import AIReviewer
-from qmate_agent.sheet import Row
-from qmate_agent.validate import build_job, job_hash
-
-FCFG = config.load("fields.json")
-SHEET = config.load("sheet.json")
+from qmate_agent.checks import Manuscript
+from tests.fixtures import ROW, clean_row, table
 
 
 class FakeClient:
     def __init__(self, payload, stop_reason="end_turn"):
         text = SimpleNamespace(type="text", text=json.dumps(payload, ensure_ascii=False))
+        self.sent = {}
         resp = SimpleNamespace(stop_reason=stop_reason, content=[text])
-        self.beta = SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: resp))
+
+        def create(**kw):
+            self.sent = kw
+            return resp
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=create))
 
 
 class TestAIReview(unittest.TestCase):
-    def test_issues_are_tagged_ai(self):
-        payload = {"issues": [{"severity": "warning", "field": "title", "message": "職種名と仕事内容が合っていません",
-                               "suggestion": "食品の検品・梱包"}], "summary": "1件"}
-        issues, summary = AIReviewer(client=FakeClient(payload)).review({"title": "x"}, {}, [])
-        self.assertEqual((issues[0].source, issues[0].severity), ("ai", "warning"))
-        self.assertEqual(summary, "1件")
+    def test_only_review_columns_are_sent(self):
+        client = FakeClient({"issues": [{"severity": "warning", "column": "キーワードリスト（複数選択可）",
+                                         "message": "寮の記載がないのに寮・社宅あり", "suggestion": "削除"}],
+                             "summary": "1件"})
+        issues, summary = AIReviewer(client=client).review(dict(ROW, UID="secret-uid"), [])
+        self.assertEqual((issues[0].source, summary), ("ai", "1件"))
+        self.assertNotIn("secret-uid", client.sent["messages"][0]["content"])
+        self.assertIn("メラミン化粧板", client.sent["messages"][0]["content"])
 
     def test_refusal_becomes_error(self):
-        issues, _ = AIReviewer(client=FakeClient({}, stop_reason="refusal")).review({}, {}, [])
+        issues, _ = AIReviewer(client=FakeClient({}, "refusal")).review(ROW, [])
         self.assertEqual(issues[0].severity, "error")
 
 
-ROW = {
-    "求人No": "A-1", "承認": "OK", "職種名": "部品の組立", "雇用形態": "派遣社員",
-    "仕事内容": "自動車部品の組付けと目視検査をお願いします。未経験歓迎です。",
-    "都道府県": "群馬県", "勤務地住所": "群馬県サンプル市1-1", "最寄り駅": "サンプル駅",
-    "給与形態": "時給", "給与額": "1600", "月収例": "256000", "勤務時間": "8:00～17:00",
-    "休日": "土日", "年齢下限": "", "年齢上限": "", "性別": "不問", "寮": "あり",
+class FakeBook:
+    def __init__(self, tbl, verdict="✅OK"):
+        self.tbl, self.verdict = tbl, verdict
+
+    def manuscript(self, name):
+        return Manuscript(name, self.tbl)
+
+    def inspection_verdicts(self):
+        return {"出力_test": self.verdict} if self.verdict else {}
+
+
+class TestUploadGate(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.patches = [mock.patch.object(config, "STATE_DIR", self.tmp / "state"),
+                        mock.patch.object(config, "OUTPUT_DIR", self.tmp / "out")]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+
+    def review(self, tbl, status="OK", ai=True):
+        cli._save_state("reviews.json", {"出力_test": {"hash": Manuscript("出力_test", tbl).data_hash(),
+                                                       "status": status, "ai": ai, "checked_at": "now"}})
+
+    def run_upload(self, book):
+        args = SimpleNamespace(sheet="出力_test", dry_run=True, headed=False, yes=True)
+        with mock.patch.object(cli, "_spreadsheet", return_value=book), mock.patch("builtins.print") as pr:
+            code = cli.cmd_upload(args)
+        return code, " ".join(str(c.args[0]) for c in pr.call_args_list)
+
+    def test_ok_reaches_csv(self):
+        tbl = table(clean_row())
+        self.review(tbl)
+        code, out = self.run_upload(FakeBook(tbl))
+        self.assertEqual(code, 0)
+        self.assertTrue((self.tmp / "out" / "出力_test" / "出力_test.csv").exists())
+
+    def test_not_checked(self):
+        self.assertIn("check をしていません", self.run_upload(FakeBook(table(clean_row())))[1])
+
+    def test_changed_after_check(self):
+        self.review(table(clean_row()))
+        self.assertIn("変わっています", self.run_upload(FakeBook(table(clean_row(給与_上限="450000"))))[1])
+
+    def test_ng(self):
+        tbl = table(clean_row())
+        self.review(tbl, status="NG")
+        self.assertIn("NG", self.run_upload(FakeBook(tbl))[1])
+
+    def test_inspection_not_ok(self):
+        tbl = table(clean_row())
+        self.review(tbl)
+        self.assertIn("検品シートの判定", self.run_upload(FakeBook(tbl, verdict="❌NG"))[1])
+
+
+# ---- Q-mate の画面のかわり ---------------------------------------------------
+PAGES = {
+    "/user_sessions/new": "<form method=post action=/user_sessions><input type=email name=email>"
+                          "<input type=password name=password><button type=submit>ログイン</button></form>",
+    "/home": "<p>ホーム</p>",
+    "/import": "<form method=post action=/import enctype=multipart/form-data><input type=file name=f>"
+               "<button id=go type=submit>取り込む</button></form>",
 }
 
 
-class TestSelectTargets(unittest.TestCase):
-    def run_select(self, row_values, reviews, posted=None):
-        rows = [Row(2, row_values)]
-        jobs = [build_job(r, FCFG["fields"]) for r in rows]
-        return select_targets(rows, jobs, SHEET, FCFG["fields"], FCFG["rules"], reviews, posted or {})
+class Handler(BaseHTTPRequestHandler):
+    uploaded = b""
 
-    def review_of(self, values, status="OK", ai=True):
-        return {"A-1": {"hash": job_hash(build_job(Row(2, values), FCFG["fields"])), "status": status, "ai": ai}}
+    def _send(self, code, body="", location=None):
+        self.send_response(code)
+        if location:
+            self.send_header("Location", location)
+        data = f"<!doctype html><meta charset=utf-8>{body}".encode()
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
-    def test_approved_and_unchanged(self):
-        targets, skipped = self.run_select(ROW, self.review_of(ROW))
-        self.assertEqual(len(targets), 1)
+    def do_GET(self):
+        self._send(200, PAGES.get(self.path.split("?")[0], "not found"))
 
-    def test_not_approved_is_ignored(self):
-        targets, skipped = self.run_select(dict(ROW, 承認=""), self.review_of(ROW))
-        self.assertEqual((targets, skipped), ([], []))
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        if self.path == "/user_sessions":
+            ok = b"password=pw" in body
+            return self._send(302, location="/home" if ok else "/user_sessions/new")
+        Handler.uploaded = body
+        self._send(200, "<p>取り込みが完了しました</p>" if "求人ボックス用職種名".encode() in body
+                   else "<p>エラー：列が足りません</p>")
 
-    def test_changed_after_check(self):
-        targets, skipped = self.run_select(dict(ROW, 給与額="1700"), self.review_of(ROW))
-        self.assertEqual(targets, [])
-        self.assertIn("変わって", skipped[0][2])
+    def log_message(self, *a):
+        pass
 
-    def test_ng_is_skipped(self):
-        targets, _ = self.run_select(ROW, self.review_of(ROW, status="NG"))
-        self.assertEqual(targets, [])
 
-    def test_already_posted(self):
-        h = self.review_of(ROW)["A-1"]["hash"]
-        targets, skipped = self.run_select(ROW, self.review_of(ROW), {"A-1": {"hash": h}})
-        self.assertEqual(targets, [])
-        self.assertIn("投稿済み", skipped[0][2])
+@unittest.skipUnless(os.environ.get("PLAYWRIGHT_CHROMIUM_PATH") or Path.home().joinpath(".cache/ms-playwright").exists(),
+                     "ブラウザがありません")
+class TestUploader(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{cls.srv.server_port}"
+        cls.cfg = dict(config.load("settings.json")["qmate"], login_url=base + "/user_sessions/new",
+                       upload_url=base + "/import", upload_button_selector="#go",
+                       success_pattern="取り込みが完了しました", timeout_ms=10000)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def upload(self, tbl, pw="pw"):
+        from qmate_agent.csv_export import to_csv_bytes
+        from qmate_agent.uploader import QmateUploader
+        tmp = Path(tempfile.mkdtemp())
+        csv_path = tmp / "x.csv"
+        csv_path.write_bytes(to_csv_bytes(Manuscript("x", tbl)))
+        with mock.patch.dict(os.environ, {"QMATE_ID": "a@example.com", "QMATE_PASSWORD": pw}):
+            return QmateUploader(self.cfg, out_dir=tmp).upload(csv_path, "x")
+
+    def test_success(self):
+        r = self.upload(table(clean_row()))
+        self.assertTrue(r.ok, r)
+        self.assertIn("メラミン化粧板".encode(), Handler.uploaded)
+
+    def test_error_text_is_failure(self):
+        r = self.upload([["UID"], ["1"]])
+        self.assertFalse(r.ok)
+        self.assertIn("エラー", r.message)
+
+    def test_wrong_password(self):
+        r = self.upload(table(clean_row()), pw="bad")
+        self.assertFalse(r.ok)
+        self.assertIn("ログインできません", r.message)
 
 
 if __name__ == "__main__":
