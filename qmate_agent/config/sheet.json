@@ -1,0 +1,16 @@
+{
+  "_説明": "読み込むスプレッドシートの設定。source は gsheet / csv のどちらか。",
+  "source": "gsheet",
+  "spreadsheet_id": "ここにスプレッドシートIDを入れる（URLの /d/ と /edit の間）",
+  "worksheet": "求人一覧",
+  "service_account_file": "service_account.json",
+  "csv_path": "sample/jobs_sample.csv",
+  "id_column": "求人No",
+  "approval_column": "承認",
+  "approval_value": "OK",
+  "write_back": {
+    "check_status_column": "AIチェック",
+    "check_detail_column": "チェック内容",
+    "post_status_column": "投稿状況"
+  }
+}

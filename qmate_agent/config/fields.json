@@ -1,0 +1,29 @@
+{
+  "_説明": "シートの列と投稿項目の対応、および機械チェックのルール。column はシートの見出し名。",
+  "fields": [
+    {"key": "job_no",          "column": "求人No",     "label": "求人No",   "required": true,  "type": "text", "max_len": 30},
+    {"key": "title",           "column": "職種名",     "label": "職種名",   "required": true,  "type": "text", "max_len": 40},
+    {"key": "employment_type", "column": "雇用形態",   "label": "雇用形態", "required": true,  "type": "enum",
+     "choices": ["派遣社員", "正社員", "契約社員", "アルバイト・パート", "無期雇用派遣"]},
+    {"key": "description",     "column": "仕事内容",   "label": "仕事内容", "required": true,  "type": "text", "min_len": 20, "max_len": 2000},
+    {"key": "prefecture",      "column": "都道府県",   "label": "都道府県", "required": true,  "type": "prefecture"},
+    {"key": "address",         "column": "勤務地住所", "label": "勤務地住所", "required": true, "type": "text", "max_len": 100},
+    {"key": "station",         "column": "最寄り駅",   "label": "最寄り駅", "required": false, "type": "text", "max_len": 50},
+    {"key": "wage_type",       "column": "給与形態",   "label": "給与形態", "required": true,  "type": "enum", "choices": ["時給", "日給", "月給"]},
+    {"key": "wage",            "column": "給与額",     "label": "給与額",   "required": true,  "type": "int", "min": 1, "max": 2000000},
+    {"key": "monthly_income",  "column": "月収例",     "label": "月収例",   "required": false, "type": "int", "min": 50000, "max": 1500000},
+    {"key": "work_hours",      "column": "勤務時間",   "label": "勤務時間", "required": true,  "type": "text", "max_len": 100},
+    {"key": "holiday",         "column": "休日",       "label": "休日",     "required": true,  "type": "text", "max_len": 100},
+    {"key": "age_min",         "column": "年齢下限",   "label": "年齢下限", "required": false, "type": "int", "min": 15, "max": 80},
+    {"key": "age_max",         "column": "年齢上限",   "label": "年齢上限", "required": false, "type": "int", "min": 15, "max": 80},
+    {"key": "gender",          "column": "性別",       "label": "性別",     "required": false, "type": "text"},
+    {"key": "dorm",            "column": "寮",         "label": "寮",       "required": false, "type": "enum", "choices": ["あり", "なし"]}
+  ],
+  "rules": {
+    "_最低賃金の注意": "最低賃金は毎年10月ごろ改定される。min_wage_by_prefecture に最新の地域別最低賃金を入れること。未設定の県は min_wage_default で判定する。",
+    "min_wage_default": 1000,
+    "min_wage_by_prefecture": {},
+    "hourly_monthly_hours_range": [100, 230],
+    "daily_monthly_days_range": [15, 26]
+  }
+}
