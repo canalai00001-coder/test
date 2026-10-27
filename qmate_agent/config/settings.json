@@ -11,15 +11,17 @@
   "csv": {"encoding": "utf-8", "newline": "\r\n"},
   "qmate": {
     "login_url": "https://m.q-mate.jp/user_sessions/new?layout=login",
-    "id_selectors": ["input[type='email']", "input[name*='email']", "input[name*='login']"],
-    "password_selectors": ["input[type='password']"],
-    "login_button_selectors": ["button[type='submit']", "input[type='submit']"],
-    "upload_url": "（CSV一括入稿ページのURL：画面を確認後に設定）",
-    "file_input_selector": "input[type='file']",
-    "upload_button_selector": "（取り込みボタンのセレクタ：画面を確認後に設定）",
-    "result_selector": "body",
-    "success_pattern": "（取り込み成功時に出る文言：画面を確認後に設定）",
+    "id_selectors": ["#login_id", "input[type='email']", "input[name*='email']", "input[name*='login']"],
+    "password_selectors": ["#password", "input[type='password']"],
+    "login_button_selectors": ["#login_button", "button[type='submit']", "input[type='submit']"],
+    "upload_url": "https://m.q-mate.jp/job_offers/bulk_new?co=27859",
+    "file_input_selector": "#file",
+    "upload_button_selector": "#csv_import_submit",
+    "result_selector": "#csv_import_log",
+    "success_pattern": "成功",
     "error_pattern": "エラー|失敗|不正|できません",
+    "result_poll_interval_ms": 5000,
+    "result_poll_times": 36,
     "timeout_ms": 60000
   }
 }

@@ -106,13 +106,29 @@ PAGES = {
     "/user_sessions/new": "<form method=post action=/user_sessions><input type=email name=email>"
                           "<input type=password name=password><button type=submit>ログイン</button></form>",
     "/home": "<p>ホーム</p>",
-    "/import": "<form method=post action=/import enctype=multipart/form-data><input type=file name=f>"
-               "<button id=go type=submit>取り込む</button></form>",
 }
+
+
+def import_page():
+    # Q-mate の CSV取込画面に合わせた仮の画面。取り込みは受付後に裏で処理され、
+    # 「最後に受付したCSV取込」の欄が 処理中 → 成功 / エラー と変わる。
+    log = Handler.log
+    if Handler.pending:
+        Handler.pending -= 1
+        log = log.replace("{status}", "処理中")
+    else:
+        log = log.replace("{status}", Handler.final)
+    return ("<form method=post action=/import enctype=multipart/form-data><input type=file name=file id=file>"
+            "<input type=submit id=csv_import_submit value=アップロード></form>"
+            f"<div id=csv_import_log>最後に受付したCSV取込 {log}</div>"
+            "<p>テンプレート出力 成功</p>")
 
 
 class Handler(BaseHTTPRequestHandler):
     uploaded = b""
+    log = "前回.csv 成功 2026/10/01 10:00:00"
+    pending = 0
+    final = ""
 
     def _send(self, code, body="", location=None):
         self.send_response(code)
@@ -125,7 +141,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        self._send(200, PAGES.get(self.path.split("?")[0], "not found"))
+        path = self.path.split("?")[0]
+        self._send(200, import_page() if path == "/import" else PAGES.get(path, "not found"))
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
@@ -133,8 +150,10 @@ class Handler(BaseHTTPRequestHandler):
             ok = b"password=pw" in body
             return self._send(302, location="/home" if ok else "/user_sessions/new")
         Handler.uploaded = body
-        self._send(200, "<p>取り込みが完了しました</p>" if "求人ボックス用職種名".encode() in body
-                   else "<p>エラー：列が足りません</p>")
+        Handler.log = "x.csv {status} 2026/10/27 21:00:00"
+        Handler.pending = 2
+        Handler.final = "成功" if "求人ボックス用職種名".encode() in body else "エラー内容を見る"
+        self._send(302, location="/import")
 
     def log_message(self, *a):
         pass
@@ -149,26 +168,30 @@ class TestUploader(unittest.TestCase):
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
         base = f"http://127.0.0.1:{cls.srv.server_port}"
         cls.cfg = dict(config.load("settings.json")["qmate"], login_url=base + "/user_sessions/new",
-                       upload_url=base + "/import", upload_button_selector="#go",
-                       success_pattern="取り込みが完了しました", timeout_ms=10000)
+                       upload_url=base + "/import", result_poll_interval_ms=10, timeout_ms=10000)
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
 
-    def upload(self, tbl, pw="pw"):
+    def upload(self, tbl, pw="pw", **cfg):
         from qmate_agent.csv_export import to_csv_bytes
         from qmate_agent.uploader import QmateUploader
         tmp = Path(tempfile.mkdtemp())
         csv_path = tmp / "x.csv"
         csv_path.write_bytes(to_csv_bytes(Manuscript("x", tbl)))
         with mock.patch.dict(os.environ, {"QMATE_ID": "a@example.com", "QMATE_PASSWORD": pw}):
-            return QmateUploader(self.cfg, out_dir=tmp).upload(csv_path, "x")
+            return QmateUploader(dict(self.cfg, **cfg), out_dir=tmp).upload(csv_path, "x")
 
     def test_success(self):
         r = self.upload(table(clean_row()))
         self.assertTrue(r.ok, r)
         self.assertIn("メラミン化粧板".encode(), Handler.uploaded)
+
+    def test_gives_up_while_processing(self):
+        r = self.upload(table(clean_row()), result_poll_times=1)
+        self.assertFalse(r.ok)
+        self.assertIn("処理中", r.page_text)
 
     def test_error_text_is_failure(self):
         r = self.upload([["UID"], ["1"]])

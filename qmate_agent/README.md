@@ -88,21 +88,28 @@ export QMATE_ID=...
 export QMATE_PASSWORD=...
 ```
 
-### 4. Q-mate の CSV 入稿画面の設定（未完了）
+### 4. Q-mate の CSV 入稿画面の設定
 
-`config/settings.json` の `qmate` のうち、次の3つはまだ仮の値です。
-Q-mate の CSV 一括入稿画面を確認してから埋めます。
+`config/settings.json` の `qmate` は、2026/10/27 に実際の画面（求人情報一覧 →［CSV取込］）を見て埋めてあります。
 
-- `upload_url`：CSV を取り込むページの URL
-- `upload_button_selector`：取り込みボタン
-- `success_pattern`：取り込みに成功したときに画面に出る文言
+| 項目 | 値 | 画面のどこか |
+|---|---|---|
+| `upload_url` | `https://m.q-mate.jp/job_offers/bulk_new?co=27859` | CSV取込（AspiRove株式会社）のページ |
+| `file_input_selector` | `#file` | ［ファイルを選択］ |
+| `upload_button_selector` | `#csv_import_submit` | ［アップロード］ |
+| `result_selector` | `#csv_import_log` | 「最後に受付したCSV取込」の表 |
+| `success_pattern` | `成功` | 表のステータス欄 |
 
-調べるときは次のコマンドでブラウザを開き、いつも通り CSV を取り込む操作をすると、
-右側に操作内容がコードで表示されます。
+Q-mate の取り込みは、アップロードを受け付けたあとに裏で処理されます。
+そのため upload は「最後に受付したCSV取込」の表が取り込み前と変わり、
+「成功」かエラーの表示（「エラー内容を見る」など）になるまで、
+`result_poll_interval_ms`（5秒）ごとに `result_poll_times`（36回＝約3分）ページを読み込み直します。
+それでも終わらないときは失敗扱いで止まるので、CSV取込画面で結果を見てください。
+原稿の本数が多くて毎回時間切れになるなら `result_poll_times` を増やします。
 
-```bash
-playwright codegen https://m.q-mate.jp/user_sessions/new?layout=login
-```
+`co=27859` は AspiRove株式会社 の番号です。Q-mate の CSV は会社ごとに分けて入稿する決まりなので、
+別の会社の原稿を入稿するときはその会社の CSV取込ページの URL に変えてください。
+アップロード画面の「原稿確認依頼メール」は送らない設定（Q-mate の初期値のまま）です。
 
 ## 使い方
 
