@@ -43,6 +43,15 @@ class TestRules(unittest.TestCase):
     def test_required_empty(self):
         self.assertEqual(cols(issues_of(clean_row(仕事内容=""))[0], "error"), ["仕事内容"])
 
+    def test_trial_period_column_with_same_name(self):
+        # 実際の出力シートには試用期間の「給与形態」列が後ろにもう一つある（空欄のことが多い）
+        tbl = table(clean_row())
+        tbl[0].append("給与形態")
+        tbl[1].append("")
+        ms = Manuscript("出力_test", tbl)
+        self.assertEqual(ms.rows[0]["給与形態"], "月給")
+        self.assertEqual(check_sheet(ms, RULES)[0], [])
+
     def test_salary_vs_memo(self):
         self.assertEqual(cols(issues_of(clean_row(給与_下限="352000"))[0], "error"), ["給与_下限"])
 

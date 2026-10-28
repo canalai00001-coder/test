@@ -90,7 +90,14 @@ class Manuscript:
         self.headers = table[0] if table else []
         self.raw_rows = [r for r in table[1:] if any(c.strip() for c in r)]
         names = [base_name(h) for h in self.headers]
-        self.rows = [dict(zip(names, r + [""] * (len(names) - len(r)))) for r in self.raw_rows]
+        # 「給与形態」「金額表示形式」は試用期間の欄にも同じ見出しがあるので、最初の列の値を使う
+        self.rows = []
+        for r in self.raw_rows:
+            r = r + [""] * (len(names) - len(r))
+            row = {}
+            for n, v in zip(names, r):
+                row.setdefault(n, v)
+            self.rows.append(row)
 
     def data_hash(self) -> str:
         s = json.dumps([self.headers] + self.raw_rows, ensure_ascii=False)
