@@ -61,6 +61,8 @@ def cmd_check(args) -> int:
     else:
         book = _spreadsheet(settings)
         ms, verdicts = book.manuscript(args.sheet), book.inspection_verdicts()
+    for col in ms.fill_blanks(rules.get("blank_defaults", {})):
+        print(f"{col} が空欄の原稿に「{rules['blank_defaults'][col]}」を入れました")
 
     sheet_issues = [] if args.csv else inspection_issue(ms.name, verdicts, settings)
     results = check_sheet(ms, rules)
@@ -110,6 +112,7 @@ def cmd_upload(args) -> int:
     settings, rules = config.load("settings.json"), config.load("rules.json")
     book = _spreadsheet(settings)
     ms = book.manuscript(args.sheet)
+    ms.fill_blanks(rules.get("blank_defaults", {}))
     rv = _state("reviews.json").get(ms.name)
     uploaded = _state("uploaded.json")
 

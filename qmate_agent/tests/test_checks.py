@@ -52,6 +52,17 @@ class TestRules(unittest.TestCase):
         self.assertEqual(ms.rows[0]["給与形態"], "月給")
         self.assertEqual(check_sheet(ms, RULES)[0], [])
 
+    def test_blank_age_limit_becomes_nashi(self):
+        ms = Manuscript("出力_test", table(clean_row(年齢制限の有無="")))
+        self.assertEqual(ms.fill_blanks(RULES["blank_defaults"]), ["年齢制限の有無"])
+        self.assertEqual(check_sheet(ms, RULES)[0], [])
+        self.assertIn(",なし,", to_csv_bytes(ms).decode())
+
+    def test_age_limit_kept_when_filled(self):
+        ms = Manuscript("出力_test", table(clean_row(年齢制限の有無="あり", 年齢制限事由="例外事由3のイ")))
+        self.assertEqual(ms.fill_blanks(RULES["blank_defaults"]), [])
+        self.assertEqual(ms.rows[0]["年齢制限の有無"], "あり")
+
     def test_salary_vs_memo(self):
         self.assertEqual(cols(issues_of(clean_row(給与_下限="352000"))[0], "error"), ["給与_下限"])
 

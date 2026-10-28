@@ -99,6 +99,20 @@ class Manuscript:
                 row.setdefault(n, v)
             self.rows.append(row)
 
+    def fill_blanks(self, defaults: dict) -> list[str]:
+        """空欄の列に決まった値を入れる（CSV にもこの値が入る）。入れた列の名前を返す。"""
+        names = [base_name(h) for h in self.headers]
+        filled = []
+        for col, value in defaults.items():
+            if col not in names:
+                continue
+            i = names.index(col)
+            for raw, row in zip(self.raw_rows, self.rows):
+                if i < len(raw) and not raw[i].strip():
+                    raw[i] = row[col] = value
+                    filled.append(col)
+        return sorted(set(filled))
+
     def data_hash(self) -> str:
         s = json.dumps([self.headers] + self.raw_rows, ensure_ascii=False)
         return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
