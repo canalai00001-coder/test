@@ -83,6 +83,19 @@ class TestUploadGate(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertTrue((self.tmp / "out" / "出力_test" / "出力_test.csv").exists())
 
+    def test_rule_check_only_is_enough_by_default(self):
+        tbl = table(clean_row())
+        self.review(tbl, ai=False)
+        self.assertEqual(self.run_upload(FakeBook(tbl))[0], 0)
+
+    def test_ai_required_when_configured(self):
+        tbl = table(clean_row())
+        self.review(tbl, ai=False)
+        load = config.load
+        with mock.patch.object(cli.config, "load",
+                               lambda n: dict(load(n), require_ai_check=True) if n == "settings.json" else load(n)):
+            self.assertIn("AIチェックなし", self.run_upload(FakeBook(tbl))[1])
+
     def test_not_checked(self):
         self.assertIn("check をしていません", self.run_upload(FakeBook(table(clean_row())))[1])
 

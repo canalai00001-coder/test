@@ -30,7 +30,7 @@ upload は、次のどれかに当てはまると入稿せずに止まります�
 
 - check をしていない
 - check のあとにシートの内容が変わった
-- AI チェックをしていない（`--no-ai` で check した）
+- AI チェックをしていない（`--no-ai` で check した）※ `settings.json` の `require_ai_check` が true のときだけ
 - 判定が NG
 - 検品シートの判定が ✅OK 以外
 - 同じ内容をすでに入稿済み

@@ -8,6 +8,8 @@
   "inspection_verdict_column": "判定",
   "inspection_ok_value": "✅OK",
   "result_sheet": "AIチェック結果",
+  "_require_ai_check_説明": "true にすると、AI チェック（--no-ai なしの check）を済ませたシートしか入稿しない。API キーを用意するまでは false。",
+  "require_ai_check": false,
   "csv": {"encoding": "utf-8", "newline": "\r\n"},
   "qmate": {
     "login_url": "https://m.q-mate.jp/user_sessions/new?layout=login",

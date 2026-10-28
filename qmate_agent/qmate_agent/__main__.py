@@ -121,7 +121,7 @@ def cmd_upload(args) -> int:
         stop = "check をしていません"
     elif rv["hash"] != ms.data_hash():
         stop = "check のあとにシートの内容が変わっています。check をやり直してください"
-    elif not rv.get("ai"):
+    elif settings.get("require_ai_check", True) and not rv.get("ai"):
         stop = "AIチェックなしの結果です。--no-ai を付けずに check してください"
     elif rv["status"] == "NG":
         stop = "チェック結果が NG です。シートを直して check をやり直してください"
