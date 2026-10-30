@@ -194,8 +194,9 @@ def cmd_schedule(args) -> int:
     defaults = settings["schedule_defaults"]
     print(f"入稿予定表から {len(targets)}件 を実行します")
     for p in targets:
-        status = args.status or defaults.get("ステータス")
+        status = args.status or p.status or defaults.get("ステータス")
         print(f"  {p.row}行目: {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / "
+              f"{p.commute or defaults.get('通勤か入寮か')} / {p.employment or defaults.get('雇用形態')} / "
               f"{args.count or p.count}件 / ステータス {status}")
         if company and p.company != company:
             print(f"入稿先に設定している会社（{company}）と違うため実行できません。settings.json の qmate を確認してください")

@@ -26,11 +26,15 @@ class PlanRow:
     category: str     # 「1クルマ」など、実行設定の職種番号と同じ表記
     night: bool
     count: int
+    commute: str = ""     # 通勤 / 入寮（空欄なら settings.json の schedule_defaults）
+    employment: str = ""  # 正社員 / 契約社員 など
+    status: str = ""      # 公開 / 下書き
 
     @property
     def key(self) -> str:
         d = self.run_date.isoformat() if self.run_date else "日付なし"
-        return f"{self.row}|{d}|{self.company}|{self.category}|{'夜勤あり' if self.night else '夜勤なし'}|{self.count}"
+        return "|".join([str(self.row), d, self.company, self.category, "夜勤あり" if self.night else "夜勤なし",
+                         str(self.count), self.commute, self.employment, self.status])
 
 
 def parse_date(s: str, today: date) -> date | None:
@@ -50,15 +54,28 @@ def read_plan(table: list[list[str]], today: date) -> list[PlanRow]:
         return []
     head = [h.strip() for h in table[0]]
     col = {n: head.index(n) for n in ("実行日", "会社", "職種", "夜勤有無", "原稿数")}
+    # あとから足した列。無ければ空欄として扱う
+    for n in ("通勤/入寮", "雇用形態", "入稿ステータス"):
+        if n in head:
+            col[n] = head.index(n)
     rows = []
     for i, r in enumerate(table[1:], start=2):
-        get = lambda n: r[col[n]].strip() if col[n] < len(r) else ""
+        get = lambda n: r[col[n]].strip() if n in col and col[n] < len(r) else ""
         if not (get("会社") and get("職種") and get("原稿数")):
             continue
         count = int(re.sub(r"[^\d]", "", get("原稿数")) or 0)
         rows.append(PlanRow(i, parse_date(get("実行日"), today), get("会社"), get("職種"),
-                            get("夜勤有無").upper() == "TRUE", count))
+                            get("夜勤有無").upper() == "TRUE", count,
+                            get("通勤/入寮"), employment_type(get("雇用形態")), get("入稿ステータス")))
     return rows
+
+
+def employment_type(s: str) -> str:
+    """「正社員」→「正社員（人材紹介）」のように、実行設定（Q-mate）の表記にそろえる。"""
+    s = s.strip()
+    if not s or "（" in s or s == "その他":
+        return s
+    return f"{s}（人材紹介）"
 
 
 def salary_pattern(category: str, night: bool, rules: dict, default: str) -> str:
@@ -81,6 +98,9 @@ def config_row(plan: PlanRow, defaults: dict, rules: dict, today: date, run_id: 
         "給与パターン": salary_pattern(plan.category, plan.night, rules, defaults.get("給与パターン", "基本")),
         "夜勤の有無": "夜勤あり" if plan.night else "夜勤なし",
     }
+    for k, val in (("通勤か入寮か", plan.commute), ("雇用形態", plan.employment), ("ステータス", plan.status)):
+        if val:
+            v[k] = val
     for k in ("通勤か入寮か", "雇用形態", "更新種別", "ステータス", "画像カテゴリー", "スタンバイキーワード",
               "タイトル(施策)", "求人ボックスワード"):
         v.setdefault(k, defaults.get(k, ""))

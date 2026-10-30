@@ -50,11 +50,17 @@ class Spreadsheet:
         return self.book.worksheet(self.settings["plan_sheet"]).get_all_values()
 
     def write_plan_result(self, row: int, text: str) -> None:
-        """入稿予定表の「実行結果」列に結果を書く（見出しも入れる）。"""
+        """入稿予定表の「実行結果」列に結果を書く。列が無ければ見出しの右隣に作る。"""
+        from gspread.utils import rowcol_to_a1
+
         ws = self.book.worksheet(self.settings["plan_sheet"])
-        col = self.settings["plan_result_column"]
-        ws.update([["実行結果"]], f"{col}1", value_input_option="RAW")
-        ws.update([[text]], f"{col}{row}", value_input_option="RAW")
+        head = [h.strip() for h in ws.row_values(1)]
+        if "実行結果" in head:
+            col = head.index("実行結果") + 1
+        else:
+            col = len(head) + 1
+            ws.update([["実行結果"]], rowcol_to_a1(1, col), value_input_option="RAW")
+        ws.update([[text]], rowcol_to_a1(row, col), value_input_option="RAW")
 
     def append_config_row(self, values: list) -> int:
         """実行設定の最後の予約行の下に1行足し、その行番号を返す。"""

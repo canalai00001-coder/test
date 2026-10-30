@@ -13,11 +13,11 @@ from qmate_agent import schedule as sc
 RULES = config.load("rules.json")
 TODAY = date(2026, 10, 30)
 PLAN = [
-    ["実行日", "会社", "職種", "夜勤有無", "原稿数", "", "", "原稿数", "41000"],
-    ["", "AspiRove株式会社", "1クルマ", "TRUE", "500"],
-    ["2026/10/30", "AspiRove株式会社", "8梱包", "FALSE", "1,000"],
-    ["10/31", "AspiRove株式会社", "5半導体", "FALSE", "200"],
-    ["", "", "", "FALSE", "", "", "半導体(夜勤あり/なし)", "10000"],
+    ["実行日", "会社", "職種", "夜勤有無", "通勤/入寮", "雇用形態", "入稿ステータス", "原稿数"],
+    ["", "AspiRove株式会社", "1クルマ", "TRUE", "通勤", "正社員", "下書き", "500"],
+    ["2026/10/30", "AspiRove株式会社", "8梱包", "FALSE", "入寮", "契約社員", "", "1,000"],
+    ["10/31", "AspiRove株式会社", "5半導体", "FALSE", "", "", "", "200"],
+    ["", "", "", "FALSE"],
 ]
 
 
@@ -29,6 +29,12 @@ class TestPlan(unittest.TestCase):
             (3, date(2026, 10, 30), "8梱包", False, 1000),
             (4, date(2026, 10, 31), "5半導体", False, 200),
         ])
+        self.assertEqual([(p.commute, p.employment, p.status) for p in rows], [
+            ("通勤", "正社員（人材紹介）", "下書き"), ("入寮", "契約社員（人材紹介）", ""), ("", "", "")])
+
+    def test_old_layout_without_new_columns(self):
+        rows = sc.read_plan([["実行日", "会社", "職種", "夜勤有無", "原稿数"], ["", "A社", "1クルマ", "TRUE", "5"]], TODAY)
+        self.assertEqual((rows[0].count, rows[0].commute), (5, ""))
 
     def test_salary_pattern_from_floor(self):
         self.assertEqual(sc.salary_pattern("1クルマ", True, RULES, "基本"), "35万")
@@ -42,7 +48,14 @@ class TestPlan(unittest.TestCase):
         self.assertEqual(row["グループ番号"], "予定2_0900-1")
         self.assertEqual((row["作成日"], row["職種番号"], row["会社名"], row["原稿数"]), ("2026/10/30", "1クルマ", "AspiRove株式会社", 5))
         self.assertEqual((row["ステータス"], row["夜勤の有無"], row["給与パターン"]), ("下書き", "夜勤あり", "35万"))
+        self.assertEqual((row["通勤か入寮か"], row["雇用形態"]), ("通勤", "正社員（人材紹介）"))
         self.assertEqual(len(row), 16)
+
+    def test_plan_values_win_over_defaults(self):
+        defaults = config.load("settings.json")["schedule_defaults"]
+        plan = sc.read_plan(PLAN, TODAY)[1]
+        row = dict(zip(sc.CONFIG_FIELDS, sc.config_row(plan, defaults, RULES, TODAY, "0900")))
+        self.assertEqual((row["通勤か入寮か"], row["雇用形態"], row["ステータス"]), ("入寮", "契約社員（人材紹介）", "公開"))
 
     def test_heavy_light_need_title_choice(self):
         with self.assertRaises(ValueError):
@@ -136,7 +149,7 @@ class TestScheduleCommand(unittest.TestCase):
 
     def test_other_company_is_refused(self):
         book = FakeBook("")
-        book.plan_table = lambda: [PLAN[0], ["2026/10/30", "ArK株式会社", "8梱包", "FALSE", "10"]]
+        book.plan_table = lambda: [PLAN[0], ["2026/10/30", "ArK株式会社", "8梱包", "FALSE", "", "", "", "10"]]
         self.assertEqual(self.run_schedule(book)[0], 1)
         self.assertEqual(book.appended, [])
 
