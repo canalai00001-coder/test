@@ -115,6 +115,26 @@ Q-mate の取り込みは、アップロードを受け付けたあとに裏で�
 別の会社の原稿を入稿するときはその会社の CSV取込ページの URL に変えてください。
 アップロード画面の「原稿確認依頼メール」は送らない設定（Q-mate の初期値のまま）です。
 
+### 5. 入稿予定表からの自動実行（schedule）の準備
+
+`schedule` は、スプレッドシートの「入稿予定表」に書いた行をもとに、
+実行設定への予約 → GAS での生成 → チェック → 入稿 までを続けて行います。
+ツールから GAS を動かすため、GAS に呼び出し口を1つ追加します（既存のコードは変えません）。
+
+1. スプレッドシートの［拡張機能］→［Apps Script］を開く
+2. 左の「ファイル」の＋ →［スクリプト］で `qmate_agent_api` を作り、`gas/qmate_agent_api.gs` の中身を貼り付けて保存
+3. 上の関数の選択欄で `setupQmateAgentToken` を選んで［実行］→ 権限を許可 → 実行ログに出た「合言葉」を控える
+4. 右上［デプロイ］→［新しいデプロイ］→ 種類の選択で［ウェブアプリ］
+   - 次のユーザーとして実行：自分
+   - アクセスできるユーザー：全員
+5. ［デプロイ］を押し、表示されたウェブアプリの URL を `config/settings.json` の `gas_webapp_url` に入れる
+6. 合言葉は環境変数で渡す：`set QMATE_GAS_TOKEN=合言葉`
+
+入稿予定表にない項目（通勤か入寮か、雇用形態、ステータス、タイトル施策、求人ボックスワードなど）は
+`settings.json` の `schedule_defaults` の値を使います。給与パターンは `rules.json` の給与下限から決めます
+（クルマの夜勤ありなら「35万」）。6重め・7軽めは GAS で職種名の選択が必要なので、まだ自動実行できません。
+結果は入稿予定表の F 列（実行結果）に書き込みます。
+
 ## 使い方
 
 ```bash
@@ -129,7 +149,16 @@ python -m qmate_agent upload --sheet 出力_G1_GritMate株式会社_1クルマ_2
 
 # 入稿（最初は --headed でブラウザの動きを見ながら）
 python -m qmate_agent upload --sheet 出力_G1_GritMate株式会社_1クルマ_20261022 --headed
+
+# 入稿予定表の今日の行を、生成から入稿まで
+python -m qmate_agent schedule
+
+# 試すとき：入稿予定表の2行目を、下書き・5件だけで
+python -m qmate_agent schedule --row 2 --status 下書き --count 5 --headed
 ```
+
+毎日自動で動かすときは、Windows の「タスク スケジューラ」で `python -m qmate_agent schedule --yes` を
+毎朝実行するように登録します（その時間にパソコンの電源が入っている必要があります）。
 
 ### CSV について
 
@@ -165,6 +194,8 @@ python -m unittest discover -s tests -t .
 | `qmate_agent/csv_export.py` | 出力シート → CSV |
 | `qmate_agent/uploader.py` | Q-mate へのログインと CSV 入稿 |
 | `qmate_agent/sheet.py` | スプレッドシートの読み書き |
+| `qmate_agent/schedule.py` | 入稿予定表 → 実行設定への予約 → GAS での生成待ち |
+| `gas/qmate_agent_api.gs` | ツールから GAS の生成を呼び出すための入口（Apps Script に追加する） |
 | `qmate_agent/report.py` | 確認用レポート |
 | `state/` | チェック時のシート内容のハッシュと入稿履歴（自動作成） |
 | `output/` | レポート・CSV・入稿結果のスクリーンショット（自動作成） |

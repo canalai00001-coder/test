@@ -46,6 +46,33 @@ class Spreadsheet:
         ni, vi = head.index(s["inspection_name_column"]), head.index(s["inspection_verdict_column"])
         return {r[ni]: r[vi] for r in table[1:] if len(r) > max(ni, vi) and r[ni]}
 
+    def plan_table(self) -> list[list[str]]:
+        return self.book.worksheet(self.settings["plan_sheet"]).get_all_values()
+
+    def write_plan_result(self, row: int, text: str) -> None:
+        """入稿予定表の「実行結果」列に結果を書く（見出しも入れる）。"""
+        ws = self.book.worksheet(self.settings["plan_sheet"])
+        col = self.settings["plan_result_column"]
+        ws.update([["実行結果"]], f"{col}1", value_input_option="RAW")
+        ws.update([[text]], f"{col}{row}", value_input_option="RAW")
+
+    def append_config_row(self, values: list) -> int:
+        """実行設定の最後の予約行の下に1行足し、その行番号を返す。"""
+        from .schedule import CONFIG_DATA_START_ROW
+
+        ws = self.book.worksheet(self.settings["config_sheet"])
+        table = ws.get_all_values()
+        last = max([i for i, r in enumerate(table, start=1)
+                    if i >= CONFIG_DATA_START_ROW and any(c.strip() for c in r[:6])], default=CONFIG_DATA_START_ROW - 1)
+        row = last + 1
+        ws.update([values], f"A{row}", value_input_option="USER_ENTERED")
+        return row
+
+    def config_status(self, row: int) -> str:
+        from .schedule import CONFIG_STATUS_COL
+
+        return (self.book.worksheet(self.settings["config_sheet"]).cell(row, CONFIG_STATUS_COL).value or "").strip()
+
     def write_results(self, rows: list[list[str]]) -> None:
         """AIチェック結果シートを作り直して書き込む。"""
         import gspread

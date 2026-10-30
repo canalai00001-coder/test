@@ -11,11 +11,29 @@
   "_require_ai_check_説明": "true にすると、AI チェック（--no-ai なしの check）を済ませたシートしか入稿しない。API キーを用意するまでは false。",
   "require_ai_check": false,
   "csv": {"encoding": "utf-8", "newline": "\r\n"},
+  "_schedule_説明": "schedule コマンドの設定。入稿予定表にない項目は schedule_defaults の値で実行設定に予約する。給与パターンは rules.json の給与下限から決める（下限がない職種はここの値）。",
+  "plan_sheet": "入稿予定表",
+  "plan_result_column": "F",
+  "config_sheet": "実行設定",
+  "gas_webapp_url": "（GAS のウェブアプリの URL：gas/qmate_agent_api.gs をデプロイ後に設定）",
+  "generate_timeout_min": 30,
+  "schedule_defaults": {
+    "通勤か入寮か": "通勤",
+    "雇用形態": "正社員（人材紹介）",
+    "更新種別": "登録",
+    "ステータス": "公開",
+    "画像カテゴリー": "",
+    "給与パターン": "基本",
+    "スタンバイキーワード": "",
+    "タイトル(施策)": "タイトル2(施策)",
+    "求人ボックスワード": "遠方からの応募可能"
+  },
   "qmate": {
     "login_url": "https://m.q-mate.jp/user_sessions/new?layout=login",
     "id_selectors": ["#login_id", "input[type='email']", "input[name*='email']", "input[name*='login']"],
     "password_selectors": ["#password", "input[type='password']"],
     "login_button_selectors": ["#login_button", "button[type='submit']", "input[type='submit']"],
+    "company": "AspiRove株式会社",
     "upload_url": "https://m.q-mate.jp/job_offers/bulk_new?co=27859",
     "file_input_selector": "#file",
     "upload_button_selector": "#csv_import_submit",
@@ -23,7 +41,7 @@
     "success_pattern": "成功",
     "error_pattern": "エラー|失敗|不正|できません",
     "result_poll_interval_ms": 5000,
-    "result_poll_times": 36,
+    "result_poll_times": 120,
     "timeout_ms": 60000
   }
 }

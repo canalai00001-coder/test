@@ -3,11 +3,14 @@
     python -m qmate_agent check --sheet 出力_G1_...      # チェック → output/ にレポートと CSV
     python -m qmate_agent upload --sheet 出力_G1_... --dry-run   # 入稿前の最終確認だけ
     python -m qmate_agent upload --sheet 出力_G1_...      # Q-mate に CSV を入稿
+    python -m qmate_agent schedule                     # 入稿予定表の今日の行を生成 → チェック → 入稿
 """
 import argparse
 import json
+import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
+from types import SimpleNamespace
 
 from . import config
 from .checks import Issue, check_sheet, status_of
@@ -100,8 +103,14 @@ def cmd_check(args) -> int:
                               i.suggestion, "AI" if i.source == "ai" else "ルール", now])
         book.write_results(table)
 
-    for n, issues in enumerate(results, start=2):
-        print(f"{n}行目: {status_of(issues)}（{len(issues)}件）")
+    if len(results) <= 30:
+        for n, issues in enumerate(results, start=2):
+            print(f"{n}行目: {status_of(issues)}（{len(issues)}件）")
+    else:
+        counts = {}
+        for issues in results:
+            counts[status_of(issues)] = counts.get(status_of(issues), 0) + 1
+        print("、".join(f"{k} {v}件" for k, v in counts.items()))
     print(f"\n判定: {overall}")
     print(f"レポート: {out_dir / 'report.html'}")
     print(f"CSV: {out_dir / (ms.name + '.csv')}")
@@ -160,6 +169,80 @@ def cmd_upload(args) -> int:
     return 0 if result.ok else 2
 
 
+def cmd_schedule(args) -> int:
+    from . import schedule as sc
+
+    settings, rules = config.load("settings.json"), config.load("rules.json")
+    today = date.fromisoformat(args.date) if args.date else date.today()
+    book = _spreadsheet(settings)
+    plans = sc.read_plan(book.plan_table(), today)
+    if args.row:
+        targets = [p for p in plans if p.row == args.row]
+    else:
+        targets = [p for p in plans if p.run_date == today]
+    done = _state("schedule.json")
+    if not args.force:
+        skipped = [p for p in targets if p.key in done]
+        for p in skipped:
+            print(f"入稿予定表 {p.row}行目は {done[p.key]['finished_at']} に実行済みです（やり直すときは --force）")
+        targets = [p for p in targets if p.key not in done]
+    if not targets:
+        print(f"入稿予定表に、{today:%Y/%m/%d} に実行する行がありません")
+        return 0
+
+    company = settings["qmate"].get("company")
+    defaults = settings["schedule_defaults"]
+    print(f"入稿予定表から {len(targets)}件 を実行します")
+    for p in targets:
+        status = args.status or defaults.get("ステータス")
+        print(f"  {p.row}行目: {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / "
+              f"{args.count or p.count}件 / ステータス {status}")
+        if company and p.company != company:
+            print(f"入稿先に設定している会社（{company}）と違うため実行できません。settings.json の qmate を確認してください")
+            return 1
+    if not args.yes and input("原稿を生成して Q-mate に入稿します。よろしいですか？ [y/N] > ").strip().lower() != "y":
+        print("中止しました")
+        return 1
+
+    url, token = settings.get("gas_webapp_url", ""), os.environ.get("QMATE_GAS_TOKEN", "")
+    if not url.startswith("https://") or not token:
+        print("GAS のウェブアプリの URL（settings.json の gas_webapp_url）と、環境変数 QMATE_GAS_TOKEN を設定してください")
+        return 1
+    gas = sc.GasRunner(url, token)
+    run_id = datetime.now().strftime("%H%M")
+    failed = 0
+    for p in targets:
+        print(f"\n=== 入稿予定表 {p.row}行目 ===")
+        try:
+            values = sc.config_row(p, defaults, rules, today, run_id, args.status, args.count)
+            config_row = book.append_config_row(values)
+            print(f"実行設定 {config_row}行目に予約しました。GAS で生成します")
+            gas.run()
+            text = sc.wait_generated(book, config_row, settings.get("generate_timeout_min", 30) * 60, 15, print)
+            sheets = sc.output_sheets(text)
+            if text.startswith("❌") or not sheets:
+                raise RuntimeError(f"生成に失敗しました: {text}")
+            print(f"生成しました: {', '.join(sheets)}")
+            for name in sheets:
+                print(f"\n--- チェック: {name} ---")
+                if cmd_check(SimpleNamespace(sheet=name, csv=None, no_ai=not settings.get("require_ai_check"))) == 2:
+                    raise RuntimeError(f"{name} のチェック結果が NG のため入稿しません。レポートを確認してください")
+                print(f"\n--- 入稿: {name} ---")
+                if cmd_upload(SimpleNamespace(sheet=name, dry_run=args.dry_run, headed=args.headed, yes=True)) != 0:
+                    raise RuntimeError(f"{name} の入稿に失敗しました")
+            result = f"{'CSV作成まで' if args.dry_run else '入稿済み'}（{datetime.now():%m/%d %H:%M}）{', '.join(sheets)}"
+            if not args.dry_run:
+                done[p.key] = {"sheets": sheets, "finished_at": datetime.now().isoformat(timespec="seconds")}
+                _save_state("schedule.json", done)
+        except Exception as e:
+            failed += 1
+            result = f"失敗（{datetime.now():%m/%d %H:%M}）{e}"
+            print(result)
+        book.write_plan_result(p.row, result)
+    print(f"\n完了: {len(targets) - failed}件 成功 / {failed}件 失敗")
+    return 0 if not failed else 2
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="qmate_agent")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -179,6 +262,17 @@ def main(argv=None) -> int:
     u.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
     u.add_argument("--yes", action="store_true", help="実行前の確認を省く")
     u.set_defaults(func=cmd_upload)
+
+    s = sub.add_parser("schedule", help="入稿予定表の行を生成からチェック、入稿まで行う")
+    s.add_argument("--date", help="この日付の行を実行する（YYYY-MM-DD。省略時は今日）")
+    s.add_argument("--row", type=int, help="入稿予定表のこの行だけを、実行日に関係なく実行する")
+    s.add_argument("--status", help="ステータスを上書きする（試すときは 下書き）")
+    s.add_argument("--count", type=int, help="原稿数を上書きする（試すときに少なくする）")
+    s.add_argument("--dry-run", action="store_true", help="生成とチェック、CSV 作成までで止める")
+    s.add_argument("--headed", action="store_true", help="入稿のブラウザを表示する")
+    s.add_argument("--force", action="store_true", help="実行済みの行ももう一度実行する")
+    s.add_argument("--yes", action="store_true", help="実行前の確認を省く（毎日の自動実行用）")
+    s.set_defaults(func=cmd_schedule)
 
     args = ap.parse_args(argv)
     return args.func(args)
