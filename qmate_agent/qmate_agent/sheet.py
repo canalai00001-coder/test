@@ -46,8 +46,12 @@ class Spreadsheet:
         ni, vi = head.index(s["inspection_name_column"]), head.index(s["inspection_verdict_column"])
         return {r[ni]: r[vi] for r in table[1:] if len(r) > max(ni, vi) and r[ni]}
 
-    def plan_table(self) -> list[list[str]]:
-        return self.book.worksheet(self.settings["plan_sheet"]).get_all_values()
+    def plan_table(self) -> list[list]:
+        from gspread.utils import ValueRenderOption
+
+        # 書式を当てない値で読む（実行日は表示形式に関係なく日付のシリアル値で受け取る）
+        return self.book.worksheet(self.settings["plan_sheet"]).get_all_values(
+            value_render_option=ValueRenderOption.unformatted)
 
     def write_plan_result(self, row: int, text: str) -> None:
         """入稿予定表の「実行結果」列に結果を書く。列が無ければ見出しの右隣に作る。"""

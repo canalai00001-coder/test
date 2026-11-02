@@ -32,6 +32,11 @@ class TestPlan(unittest.TestCase):
         self.assertEqual([(p.commute, p.employment, p.status) for p in rows], [
             ("通勤", "正社員（人材紹介）", "下書き"), ("入寮", "契約社員（人材紹介）", ""), ("", "", "")])
 
+    def test_unformatted_values_from_sheet(self):
+        # シートから書式なしで読むと、日付はシリアル値、数値は数、チェックボックスは真偽値になる
+        rows = sc.read_plan([PLAN[0], [46328, "AspiRove株式会社", "1クルマ", True, "通勤", "正社員", "下書き", 50]], TODAY)
+        self.assertEqual((rows[0].run_date, rows[0].night, rows[0].count), (date(2026, 11, 2), True, 50))
+
     def test_old_layout_without_new_columns(self):
         rows = sc.read_plan([["実行日", "会社", "職種", "夜勤有無", "原稿数"], ["", "A社", "1クルマ", "TRUE", "5"]], TODAY)
         self.assertEqual((rows[0].count, rows[0].commute), (5, ""))

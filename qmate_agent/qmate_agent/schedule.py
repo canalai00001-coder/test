@@ -6,7 +6,7 @@
 import re
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 # 実行設定シートの列（GAS の CONFIG_COLUMNS と同じ並び。A〜P 列に書き、Q 列の実行状況を読む）
 CONFIG_FIELDS = [
@@ -37,8 +37,11 @@ class PlanRow:
                          str(self.count), self.commute, self.employment, self.status])
 
 
-def parse_date(s: str, today: date) -> date | None:
-    s = s.strip()
+def parse_date(s, today: date) -> date | None:
+    if isinstance(s, (int, float)) and not isinstance(s, bool):
+        # スプレッドシートの日付のシリアル値（表示形式に関係なく、セルに入っている日付そのもの）
+        return date(1899, 12, 30) + timedelta(days=int(s))
+    s = str(s).strip()
     for fmt in ("%Y/%m/%d", "%Y-%m-%d", "%Y年%m月%d日"):
         try:
             return datetime.strptime(s, fmt).date()
@@ -49,10 +52,14 @@ def parse_date(s: str, today: date) -> date | None:
 
 
 def read_plan(table: list[list[str]], today: date) -> list[PlanRow]:
-    """入稿予定表（1行目が見出し）から、会社・職種・原稿数がそろった行を読む。"""
+    """入稿予定表（1行目が見出し）から、会社・職種・原稿数がそろった行を読む。
+
+    実行日は表示形式で「11/2」のように見えていても正しく読めるよう、
+    シートからは書式を当てない値（日付はシリアル値）で受け取る。
+    """
     if not table:
         return []
-    head = [h.strip() for h in table[0]]
+    head = [str(h).strip() for h in table[0]]
     col = {n: head.index(n) for n in ("実行日", "会社", "職種", "夜勤有無", "原稿数")}
     # あとから足した列。無ければ空欄として扱う
     for n in ("通勤/入寮", "雇用形態", "入稿ステータス"):
@@ -60,11 +67,12 @@ def read_plan(table: list[list[str]], today: date) -> list[PlanRow]:
             col[n] = head.index(n)
     rows = []
     for i, r in enumerate(table[1:], start=2):
-        get = lambda n: r[col[n]].strip() if n in col and col[n] < len(r) else ""
+        get = lambda n: str(r[col[n]]).strip() if n in col and col[n] < len(r) else ""
         if not (get("会社") and get("職種") and get("原稿数")):
             continue
         count = int(re.sub(r"[^\d]", "", get("原稿数")) or 0)
-        rows.append(PlanRow(i, parse_date(get("実行日"), today), get("会社"), get("職種"),
+        raw_date = r[col["実行日"]] if col["実行日"] < len(r) else ""
+        rows.append(PlanRow(i, parse_date(raw_date, today), get("会社"), get("職種"),
                             get("夜勤有無").upper() == "TRUE", count,
                             get("通勤/入寮"), employment_type(get("雇用形態")), get("入稿ステータス")))
     return rows
