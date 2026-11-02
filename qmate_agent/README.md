@@ -158,6 +158,10 @@ python -m qmate_agent schedule
 python -m qmate_agent schedule --row 2 --status 下書き --count 5 --headed
 ```
 
+Windows では、`qmate_agent` フォルダの `run_schedule.bat`（今日の行を実行）と `test_schedule.bat`
+（2行目を5件だけ試す）をダブルクリックしても同じことができます。その場合、ID・パスワード・合言葉は
+`setx QMATE_ID ...` のように一度登録しておきます（登録後はコマンドプロンプトを開き直す）。
+
 毎日自動で動かすときは、Windows の「タスク スケジューラ」で `python -m qmate_agent schedule --yes` を
 毎朝実行するように登録します（その時間にパソコンの電源が入っている必要があります）。
 
