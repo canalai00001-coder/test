@@ -15,7 +15,7 @@ TODAY = date(2026, 10, 30)
 PLAN = [
     ["実行日", "会社", "職種", "夜勤有無", "通勤/入寮", "雇用形態", "入稿ステータス", "原稿数"],
     ["", "AspiRove株式会社", "1クルマ", "TRUE", "通勤", "正社員", "下書き", "500"],
-    ["2026/10/30", "AspiRove株式会社", "8梱包", "FALSE", "入寮", "契約社員", "", "1,000"],
+    ["2026/10/30", "AspiRove株式会社", "8梱包", "FALSE", "通勤", "契約社員", "", "1,000"],
     ["10/31", "AspiRove株式会社", "5半導体", "FALSE", "", "", "", "200"],
     ["", "", "", "FALSE"],
 ]
@@ -30,7 +30,7 @@ class TestPlan(unittest.TestCase):
             (4, date(2026, 10, 31), "5半導体", False, 200),
         ])
         self.assertEqual([(p.commute, p.employment, p.status) for p in rows], [
-            ("通勤", "正社員（人材紹介）", "下書き"), ("入寮", "契約社員（人材紹介）", ""), ("", "", "")])
+            ("通勤", "正社員（人材紹介）", "下書き"), ("通勤", "契約社員（人材紹介）", ""), ("", "", "")])
 
     def test_unformatted_values_from_sheet(self):
         # シートから書式なしで読むと、日付はシリアル値、数値は数、チェックボックスは真偽値になる
@@ -60,7 +60,12 @@ class TestPlan(unittest.TestCase):
         defaults = config.load("settings.json")["schedule_defaults"]
         plan = sc.read_plan(PLAN, TODAY)[1]
         row = dict(zip(sc.CONFIG_FIELDS, sc.config_row(plan, defaults, RULES, TODAY, "0900")))
-        self.assertEqual((row["通勤か入寮か"], row["雇用形態"], row["ステータス"]), ("入寮", "契約社員（人材紹介）", "公開"))
+        self.assertEqual((row["通勤か入寮か"], row["雇用形態"], row["ステータス"]), ("通勤", "契約社員（人材紹介）", "公開"))
+
+    def test_dormitory_rows_are_refused(self):
+        # 入寮はマニュアル上、別の「入寮用」スクリプトで作る
+        with self.assertRaises(ValueError):
+            sc.config_row(sc.PlanRow(2, None, "A社", "8梱包", False, 5, commute="入寮"), {}, RULES, TODAY, "0900")
 
     def test_heavy_light_need_title_choice(self):
         with self.assertRaises(ValueError):
@@ -125,6 +130,7 @@ class TestScheduleCommand(unittest.TestCase):
         self.assertEqual(book.appended[0][4], "8梱包")
         gas.return_value.run.assert_called_once()
         self.assertEqual(c.call_args.args[0].sheet, "出力_G予定3")
+        self.assertTrue(c.call_args.args[0].one_segment)
         self.assertEqual(u.call_args.args[0].sheet, "出力_G予定3")
         self.assertIn("入稿済み", book.results[3])
         # 同じ行は2回実行しない

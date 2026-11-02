@@ -68,7 +68,7 @@ def cmd_check(args) -> int:
         print(f"{col} が空欄の原稿に「{rules['blank_defaults'][col]}」を入れました")
 
     sheet_issues = [] if args.csv else inspection_issue(ms.name, verdicts, settings)
-    results = check_sheet(ms, rules)
+    results = check_sheet(ms, rules, one_segment=getattr(args, "one_segment", False))
     summaries = [""] * len(ms.rows)
     if not args.no_ai:
         from .ai_review import AIReviewer
@@ -226,7 +226,8 @@ def cmd_schedule(args) -> int:
             print(f"生成しました: {', '.join(sheets)}")
             for name in sheets:
                 print(f"\n--- チェック: {name} ---")
-                if cmd_check(SimpleNamespace(sheet=name, csv=None, no_ai=not settings.get("require_ai_check"))) == 2:
+                if cmd_check(SimpleNamespace(sheet=name, csv=None, no_ai=not settings.get("require_ai_check"),
+                                                 one_segment=True)) == 2:
                     raise RuntimeError(f"{name} のチェック結果が NG のため入稿しません。レポートを確認してください")
                 print(f"\n--- 入稿: {name} ---")
                 if cmd_upload(SimpleNamespace(sheet=name, dry_run=args.dry_run, headed=args.headed, yes=True)) != 0:

@@ -97,6 +97,8 @@ def config_row(plan: PlanRow, defaults: dict, rules: dict, today: date, run_id: 
                status: str | None = None, count: int | None = None) -> list:
     if re.sub(r"^\d+", "", plan.category) in ("重め", "軽め"):
         raise ValueError(f"{plan.category} は GAS で職種名の選択が必要なため、まだ自動実行できません")
+    if (plan.commute or defaults.get("通勤か入寮か")) == "入寮":
+        raise ValueError("入寮の原稿は別の「入寮用」スクリプトで作る決まりのため、このスプレッドシートでは自動実行できません")
     v = {
         "グループ番号": f"予定{plan.row}_{run_id}-1",
         "作成日": today.strftime("%Y/%m/%d"),

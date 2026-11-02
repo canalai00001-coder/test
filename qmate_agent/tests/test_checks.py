@@ -63,6 +63,14 @@ class TestRules(unittest.TestCase):
         self.assertEqual(ms.fill_blanks(RULES["blank_defaults"]), [])
         self.assertEqual(ms.rows[0]["年齢制限の有無"], "あり")
 
+    def test_blank_columns_checked_by_gas_inspection(self):
+        self.assertEqual(cols(issues_of(clean_row(キャッチコピー=""))[0], "error"), ["キャッチコピー"])
+
+    def test_location_duplicate_is_error_in_one_segment_sheet(self):
+        ms = Manuscript("出力_test", table(clean_row(), clean_row(求人ボックス用職種名="別のタイトル")))
+        sev = lambda one: {i.severity for i in check_sheet(ms, RULES, one_segment=one)[0] if i.column == "勤務地：市区町村"}
+        self.assertEqual((sev(False), sev(True)), ({"warning"}, {"error"}))
+
     def test_salary_vs_memo(self):
         self.assertEqual(cols(issues_of(clean_row(給与_下限="352000"))[0], "error"), ["給与_下限"])
 

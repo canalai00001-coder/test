@@ -118,6 +118,9 @@ class Manuscript:
         return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
 
 
+INSPECTION_NOT_BLANK = ("求人ボックス用職種名", "待遇・福利厚生", "キャッチコピー")
+
+
 def check_row(row: dict, headers: list[str], rules: dict) -> list[Issue]:
     issues: list[Issue] = []
     add = lambda sev, col, msg: issues.append(Issue(sev, col, msg))
@@ -126,6 +129,10 @@ def check_row(row: dict, headers: list[str], rules: dict) -> list[Issue]:
     for h in headers:
         if h.endswith("|必須") and not row.get(base_name(h), "").strip():
             add("error", base_name(h), "必須項目が空欄です")
+    # 必須ではないが、GAS の検品（⑥）で空欄を問題にしている列
+    for col in INSPECTION_NOT_BLANK:
+        if col in row and not row[col].strip():
+            add("error", col, "空欄です（GAS の検品でも問題になる項目です）")
     wage_type = nfkc(row.get("給与形態"))
     if wage_type in NEEDS_LABOR_HOURS:
         for col in ("基本給", LABOR_HOURS_COL):
@@ -215,8 +222,13 @@ def check_row(row: dict, headers: list[str], rules: dict) -> list[Issue]:
     return issues
 
 
-def check_sheet(ms: Manuscript, rules: dict) -> list[list[Issue]]:
-    """行ごとの指摘のリストを返す（ms.rows と同じ順番）。"""
+def check_sheet(ms: Manuscript, rules: dict, one_segment: bool = False) -> list[list[Issue]]:
+    """行ごとの指摘のリストを返す（ms.rows と同じ順番）。
+
+    one_segment: シート全体が1つの予約行から作られている（schedule で作ったシート）。
+    GAS の検品は予約行（1-1、1-2…）ごとに勤務地の重複を問題にするので、
+    1つの予約行だけのシートなら、シート内の勤務地の重複をエラーにする。
+    """
     results = [check_row(r, ms.headers, rules) for r in ms.rows]
 
     def dupes(key):
@@ -233,7 +245,8 @@ def check_sheet(ms: Manuscript, rules: dict) -> list[list[Issue]]:
                                     f"同じ職種名がシート内に{len(idx)}件あります"))
     for place, idx in dupes(lambda r: nfkc(r.get("勤務地：都道府県")) + nfkc(r.get("勤務地：市区町村"))).items():
         for i in idx:
-            results[i].append(Issue("warning", "勤務地：市区町村", f"勤務地「{place}」がシート内で重複しています"))
+            results[i].append(Issue("error" if one_segment else "warning", "勤務地：市区町村",
+                                    f"勤務地「{place}」がシート内で重複しています"))
     return results
 
 
