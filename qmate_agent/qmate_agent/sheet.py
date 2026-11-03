@@ -78,10 +78,8 @@ class Spreadsheet:
         ws.update([values], f"A{row}", value_input_option="USER_ENTERED")
         return row
 
-    def config_status(self, row: int) -> str:
-        from .schedule import CONFIG_STATUS_COL
-
-        return (self.book.worksheet(self.settings["config_sheet"]).cell(row, CONFIG_STATUS_COL).value or "").strip()
+    def config_status(self, row: int, col: int) -> str:
+        return (self.book.worksheet(self.settings["config_sheet"]).cell(row, col).value or "").strip()
 
     def write_results(self, rows: list[list[str]]) -> None:
         """AIチェック結果シートを作り直して書き込む。"""

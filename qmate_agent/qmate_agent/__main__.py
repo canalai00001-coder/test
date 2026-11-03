@@ -33,6 +33,14 @@ def _spreadsheet(settings):
     return Spreadsheet(settings)
 
 
+def _settings(args) -> dict:
+    """settings.json。入寮用など別のスプレッドシートの出力シートを扱うときは、その ID に差し替える。"""
+    settings = config.load("settings.json")
+    if getattr(args, "spreadsheet_id", None):
+        settings = dict(settings, spreadsheet_id=args.spreadsheet_id)
+    return settings
+
+
 def inspection_issue(name: str, verdicts: dict, settings: dict) -> list[Issue]:
     v = verdicts.get(name)
     if v is None:
@@ -57,7 +65,7 @@ def cmd_list(args) -> int:
 
 
 def cmd_check(args) -> int:
-    settings, rules = config.load("settings.json"), config.load("rules.json")
+    settings, rules = _settings(args), config.load("rules.json")
     if args.csv:
         from .sheet import manuscript_from_csv
         ms, verdicts, book = manuscript_from_csv(args.csv), {}, None
@@ -118,7 +126,7 @@ def cmd_check(args) -> int:
 
 
 def cmd_upload(args) -> int:
-    settings, rules = config.load("settings.json"), config.load("rules.json")
+    settings, rules = _settings(args), config.load("rules.json")
     book = _spreadsheet(settings)
     ms = book.manuscript(args.sheet)
     ms.fill_blanks(rules.get("blank_defaults", {}))
@@ -191,35 +199,51 @@ def cmd_schedule(args) -> int:
         return 0
 
     company = settings["qmate"].get("company")
-    defaults = settings["schedule_defaults"]
+    gas_targets = settings["schedule_targets"]
+    commutes = {}
     print(f"入稿予定表から {len(targets)}件 を実行します")
     for p in targets:
-        status = args.status or p.status or defaults.get("ステータス")
+        try:
+            commutes[p.row] = sc.commute_of(p, settings.get("schedule_default_commute", "通勤"))
+        except ValueError as e:
+            print(f"  {p.row}行目: {e}")
+            return 1
+        t = gas_targets[commutes[p.row]]
+        defaults = t.get("defaults", {})
         print(f"  {p.row}行目: {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / "
-              f"{p.commute or defaults.get('通勤か入寮か')} / {p.employment or defaults.get('雇用形態')} / "
-              f"{args.count or p.count}件 / ステータス {status}")
+              f"{commutes[p.row]}（{commutes[p.row]}用の GAS で生成） / {p.employment or defaults.get('雇用形態')} / "
+              f"{args.count or p.count}件 / ステータス {args.status or p.status or defaults.get('ステータス')}")
         if company and p.company != company:
             print(f"入稿先に設定している会社（{company}）と違うため実行できません。settings.json の qmate を確認してください")
             return 1
+
+    runners = {}
+    for c in sorted(set(commutes.values())):
+        t = gas_targets[c]
+        url, token = t.get("gas_webapp_url", ""), os.environ.get(t["token_env"], "")
+        if not url.startswith("https://") or not token:
+            print(f"{c}用の GAS のウェブアプリの URL（settings.json の schedule_targets の {c} の gas_webapp_url）と、"
+                  f"環境変数 {t['token_env']} を設定してください")
+            return 1
+        runners[c] = sc.GasRunner(url, token)
     if not args.yes and input("原稿を生成して Q-mate に入稿します。よろしいですか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
 
-    url, token = settings.get("gas_webapp_url", ""), os.environ.get("QMATE_GAS_TOKEN", "")
-    if not url.startswith("https://") or not token:
-        print("GAS のウェブアプリの URL（settings.json の gas_webapp_url）と、環境変数 QMATE_GAS_TOKEN を設定してください")
-        return 1
-    gas = sc.GasRunner(url, token)
     run_id = datetime.now().strftime("%H%M")
     failed = 0
     for p in targets:
-        print(f"\n=== 入稿予定表 {p.row}行目 ===")
+        c = commutes[p.row]
+        t = gas_targets[c]
+        gen_book = _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"]))
+        print(f"\n=== 入稿予定表 {p.row}行目（{c}） ===")
         try:
-            values = sc.config_row(p, defaults, rules, today, run_id, args.status, args.count)
-            config_row = book.append_config_row(values)
-            print(f"実行設定 {config_row}行目に予約しました。GAS で生成します")
-            gas.run()
-            text = sc.wait_generated(book, config_row, settings.get("generate_timeout_min", 30) * 60, 15, print)
+            values = sc.config_row(p, c, t, rules, today, run_id, args.status, args.count)
+            config_row = gen_book.append_config_row(values)
+            print(f"{c}用スプレッドシートの実行設定 {config_row}行目に予約しました。GAS で生成します")
+            runners[c].run()
+            text = sc.wait_generated(gen_book, config_row, sc.status_column(c),
+                                     settings.get("generate_timeout_min", 30) * 60, 15, print)
             sheets = sc.output_sheets(text)
             if text.startswith("❌") or not sheets:
                 raise RuntimeError(f"生成に失敗しました: {text}")
@@ -227,10 +251,11 @@ def cmd_schedule(args) -> int:
             for name in sheets:
                 print(f"\n--- チェック: {name} ---")
                 if cmd_check(SimpleNamespace(sheet=name, csv=None, no_ai=not settings.get("require_ai_check"),
-                                                 one_segment=True)) == 2:
+                                             one_segment=True, spreadsheet_id=t["spreadsheet_id"])) == 2:
                     raise RuntimeError(f"{name} のチェック結果が NG のため入稿しません。レポートを確認してください")
                 print(f"\n--- 入稿: {name} ---")
-                if cmd_upload(SimpleNamespace(sheet=name, dry_run=args.dry_run, headed=args.headed, yes=True)) != 0:
+                if cmd_upload(SimpleNamespace(sheet=name, dry_run=args.dry_run, headed=args.headed, yes=True,
+                                              spreadsheet_id=t["spreadsheet_id"])) != 0:
                     raise RuntimeError(f"{name} の入稿に失敗しました")
             result = f"{'CSV作成まで' if args.dry_run else '入稿済み'}（{datetime.now():%m/%d %H:%M}）{', '.join(sheets)}"
             if not args.dry_run:

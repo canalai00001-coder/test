@@ -8,14 +8,23 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-# 実行設定シートの列（GAS の CONFIG_COLUMNS と同じ並び。A〜P 列に書き、Q 列の実行状況を読む）
-CONFIG_FIELDS = [
-    "グループ番号", "作成日", "通勤か入寮か", "雇用形態", "職種番号", "会社名", "原稿数", "更新種別",
-    "ステータス", "画像カテゴリー", "給与パターン", "夜勤の有無", "スタンバイキーワード", "タイトル(施策)",
-    "求人ボックスワード", "職種名選択",
-]
-CONFIG_STATUS_COL = 17  # Q列
+# 実行設定シートの列。通勤用と入寮用で GAS が違い、列の並びも違う（GAS の CONFIG_COLUMNS と同じ並び）。
+# 予約行はこの並びで A 列から書き、その右の「実行状況」列を読んで生成の完了を待つ。
+CONFIG_FIELDS = {
+    "通勤": ["グループ番号", "作成日", "通勤か入寮か", "雇用形態", "職種番号", "会社名", "原稿数", "更新種別",
+             "ステータス", "画像カテゴリー", "給与パターン", "夜勤の有無", "スタンバイキーワード", "タイトル(施策)",
+             "求人ボックスワード", "職種名選択"],
+    "入寮": ["グループ番号", "作成日", "通勤か入寮か", "雇用形態", "職種番号", "会社名", "原稿数", "更新種別",
+             "ステータス", "画像カテゴリー", "給与パターン", "夜勤の有無", "スタンバイキーワード",
+             "求人ボックスワード", "職種名選択"],
+}
+COMMUTE_TYPES = tuple(CONFIG_FIELDS)
 CONFIG_DATA_START_ROW = 4
+
+
+def status_column(commute: str) -> int:
+    """実行状況の列番号（通勤用は Q 列、入寮用は P 列）。"""
+    return len(CONFIG_FIELDS[commute]) + 1
 
 
 @dataclass
@@ -26,15 +35,16 @@ class PlanRow:
     category: str     # 「1クルマ」など、実行設定の職種番号と同じ表記
     night: bool
     count: int
-    commute: str = ""     # 通勤 / 入寮（空欄なら settings.json の schedule_defaults）
+    commute: str = ""     # 通勤 / 入寮（空欄なら settings.json の schedule_default_commute）
     employment: str = ""  # 正社員 / 契約社員 など
     status: str = ""      # 公開 / 下書き
+    title_choice: str = ""  # 6重め・7軽めの職種名選択（「7軽め｜防犯カメラの検査」または職種名だけ）
 
     @property
     def key(self) -> str:
         d = self.run_date.isoformat() if self.run_date else "日付なし"
         return "|".join([str(self.row), d, self.company, self.category, "夜勤あり" if self.night else "夜勤なし",
-                         str(self.count), self.commute, self.employment, self.status])
+                         str(self.count), self.commute, self.employment, self.status, self.title_choice])
 
 
 def parse_date(s, today: date) -> date | None:
@@ -62,7 +72,7 @@ def read_plan(table: list[list[str]], today: date) -> list[PlanRow]:
     head = [str(h).strip() for h in table[0]]
     col = {n: head.index(n) for n in ("実行日", "会社", "職種", "夜勤有無", "原稿数")}
     # あとから足した列。無ければ空欄として扱う
-    for n in ("通勤/入寮", "雇用形態", "入稿ステータス"):
+    for n in ("通勤/入寮", "雇用形態", "入稿ステータス", "職種名選択"):
         if n in head:
             col[n] = head.index(n)
     rows = []
@@ -74,7 +84,8 @@ def read_plan(table: list[list[str]], today: date) -> list[PlanRow]:
         raw_date = r[col["実行日"]] if col["実行日"] < len(r) else ""
         rows.append(PlanRow(i, parse_date(raw_date, today), get("会社"), get("職種"),
                             get("夜勤有無").upper() == "TRUE", count,
-                            get("通勤/入寮"), employment_type(get("雇用形態")), get("入稿ステータス")))
+                            get("通勤/入寮"), employment_type(get("雇用形態")), get("入稿ステータス"),
+                            get("職種名選択")))
     return rows
 
 
@@ -93,31 +104,49 @@ def salary_pattern(category: str, night: bool, rules: dict, default: str) -> str
     return f"{floor // 10000}万" if floor else default
 
 
-def config_row(plan: PlanRow, defaults: dict, rules: dict, today: date, run_id: str,
+def commute_of(plan: PlanRow, default: str) -> str:
+    """その行を通勤用・入寮用のどちらの GAS で作るか。"""
+    c = plan.commute or default
+    if c not in COMMUTE_TYPES:
+        raise ValueError(f"通勤/入寮の値「{c}」が読めません（通勤 か 入寮 を入れてください）")
+    return c
+
+
+def config_row(plan: PlanRow, commute: str, target: dict, rules: dict, today: date, run_id: str,
                status: str | None = None, count: int | None = None) -> list:
-    if re.sub(r"^\d+", "", plan.category) in ("重め", "軽め"):
-        raise ValueError(f"{plan.category} は GAS で職種名の選択が必要なため、まだ自動実行できません")
-    if (plan.commute or defaults.get("通勤か入寮か")) == "入寮":
-        raise ValueError("入寮の原稿は別の「入寮用」スクリプトで作る決まりのため、このスプレッドシートでは自動実行できません")
+    """実行設定に書く予約行。target は settings.json の schedule_targets の通勤・入寮のどちらか。"""
+    defaults = target.get("defaults", {})
+    if re.sub(r"^\d+", "", plan.category) in ("重め", "軽め") and not plan.title_choice:
+        raise ValueError(f"{plan.category} は入稿予定表の「職種名選択」列に職種名を入れてください")
+    pattern = defaults.get("給与パターン", "")
+    if target.get("salary_from_floor"):
+        pattern = salary_pattern(plan.category, plan.night, rules, pattern or "基本")
     v = {
         "グループ番号": f"予定{plan.row}_{run_id}-1",
         "作成日": today.strftime("%Y/%m/%d"),
+        "通勤か入寮か": commute,
         "職種番号": plan.category,
         "会社名": plan.company,
         "原稿数": count or plan.count,
-        "給与パターン": salary_pattern(plan.category, plan.night, rules, defaults.get("給与パターン", "基本")),
+        "給与パターン": pattern,
         "夜勤の有無": "夜勤あり" if plan.night else "夜勤なし",
+        "職種名選択": title_choice(plan),
     }
-    for k, val in (("通勤か入寮か", plan.commute), ("雇用形態", plan.employment), ("ステータス", plan.status)):
+    for k, val in (("雇用形態", plan.employment), ("ステータス", status or plan.status)):
         if val:
             v[k] = val
-    for k in ("通勤か入寮か", "雇用形態", "更新種別", "ステータス", "画像カテゴリー", "スタンバイキーワード",
+    for k in ("雇用形態", "更新種別", "ステータス", "画像カテゴリー", "スタンバイキーワード",
               "タイトル(施策)", "求人ボックスワード"):
         v.setdefault(k, defaults.get(k, ""))
-    if status:
-        v["ステータス"] = status
-    v["職種名選択"] = ""
-    return [v[f] for f in CONFIG_FIELDS]
+    return [v[f] for f in CONFIG_FIELDS[commute]]
+
+
+def title_choice(plan: PlanRow) -> str:
+    """職種名選択を GAS のプルダウンと同じ「7軽め｜職種名」の形にそろえる。"""
+    t = plan.title_choice.strip()
+    if not t or "｜" in t:
+        return t
+    return f"{plan.category}｜{t}"
 
 
 def output_sheets(status_text: str) -> list[str]:
@@ -148,11 +177,11 @@ class GasRunner:
             raise RuntimeError(f"GAS がエラーを返しました: {body.get('error')}")
 
 
-def wait_generated(book, row: int, timeout_s: int, interval_s: int, log) -> str:
+def wait_generated(book, row: int, col: int, timeout_s: int, interval_s: int, log) -> str:
     """実行設定の実行状況が完了かエラーになるまで待ち、その文言を返す。"""
     deadline = time.monotonic() + timeout_s
     while True:
-        text = book.config_status(row)
+        text = book.config_status(row, col)
         if text.startswith("✅") or text.startswith("❌"):
             return text
         if time.monotonic() >= deadline:
