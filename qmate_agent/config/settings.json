@@ -35,7 +35,7 @@
       }
     },
     "入寮": {
-      "spreadsheet_id": "1G6PkBPCtqYBfgtmtuZ0OkNvDBkMIhfQHC1_VcRRJp28",
+      "spreadsheet_id": "1f95vUf4SEPIbVwIkwrxRUID3reXgOj2i2n6wF7E06WA",
       "gas_webapp_url": "（入寮用 GAS のウェブアプリの URL）",
       "token_env": "QMATE_GAS_TOKEN_DORM",
       "salary_from_floor": false,
