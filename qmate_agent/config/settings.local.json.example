@@ -1,0 +1,7 @@
+{
+  "_説明": "このファイルを settings.local.json という名前でコピーして、自分の値を入れる。settings.json の同じ項目を上書きする。ZIP には入らないので、取り直しても消えない。",
+  "schedule_targets": {
+    "通勤": {"gas_webapp_url": "https://script.google.com/macros/s/（通勤用）/exec"},
+    "入寮": {"gas_webapp_url": "https://script.google.com/macros/s/（入寮用）/exec"}
+  }
+}

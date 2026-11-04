@@ -138,8 +138,9 @@ Q-mate の取り込みは、アップロードを受け付けたあとに裏で�
 4. 右上［デプロイ］→［新しいデプロイ］→ 種類の選択で［ウェブアプリ］
    - 次のユーザーとして実行：自分
    - アクセスできるユーザー：全員
-5. ［デプロイ］を押し、表示されたウェブアプリの URL を `config/settings.json` の
-   `schedule_targets` の「通勤」または「入寮」の `gas_webapp_url` に入れる
+5. ［デプロイ］を押し、表示されたウェブアプリの URL を `config/settings.local.json` に入れる
+   （`config/settings.local.json.example` をコピーして名前を変え、「通勤」「入寮」の `gas_webapp_url` を書き換える。
+   このファイルは ZIP に入っていないので、ZIP を取り直して settings.json を上書きしても消えない）
 6. 合言葉は環境変数で渡す：通勤用は `setx QMATE_GAS_TOKEN 合言葉`、入寮用は `setx QMATE_GAS_TOKEN_DORM 合言葉`
 
 入寮用のスプレッドシートも、サービスアカウントのメールアドレスに「編集者」で共有してください。

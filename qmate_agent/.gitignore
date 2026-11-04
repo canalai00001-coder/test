@@ -4,3 +4,4 @@ state/
 .auth/
 *.json.key
 service_account*.json
+config/*.local.json
