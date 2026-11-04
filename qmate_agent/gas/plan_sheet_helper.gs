@@ -21,6 +21,9 @@ const QMATE_PLAN_BASE_IDS = {
   '入寮': '1PDeksvTvzx6LqDC7nCz5fk4IX8Ssi3cKsRDYdVCTbdI', // ＜土台/入寮用＞Q-mate 求人原稿自動生成
 };
 const QMATE_PLAN_USAGE_SHEET = 'アカウント×職種名_使用履歴';
+// プルダウンの候補を書き出しておく隠しシート。候補の数に上限がないよう、プルダウンはこのシートの範囲を参照する
+// （候補を直接プルダウンに入れると500件までしか入らず、7軽めの職種名は入りきらない）
+const QMATE_PLAN_LIST_SHEET = '_入稿予定表_候補（自動生成・編集不要）';
 const QMATE_PLAN_COOLDOWN_DAYS = 30; // 生成側（Code.gs の COOLDOWN_DAYS）と同じ日数
 
 function setupQmatePlanHelper() {
@@ -57,6 +60,7 @@ function qmatePlanOnEdit(e) {
     }
   } catch (err) {
     Logger.log('qmatePlanOnEdit: ' + err.message);
+    SpreadsheetApp.getActiveSpreadsheet().toast(err.message, '入稿予定表の入力補助でエラー', 15);
   }
 }
 
@@ -96,7 +100,8 @@ function qmatePlanRefreshRow_(sh, cols, r, clearTitle) {
     const cell = sh.getRange(r, cols['スタンバイキーワード']);
     if (keywords.length) {
       cell.setDataValidation(SpreadsheetApp.newDataValidation()
-        .requireValueInList(keywords, true).setAllowInvalid(true).build());
+        .requireValueInRange(qmatePlanListRange_(`スタンバイキーワード｜${row.commute}`, keywords), true)
+        .setAllowInvalid(true).build());
     }
   }
 
@@ -119,7 +124,32 @@ function qmatePlanRefreshRow_(sh, cols, r, clearTitle) {
     return;
   }
   titleCell.setDataValidation(SpreadsheetApp.newDataValidation()
-    .requireValueInList(titles, true).setAllowInvalid(true).build());
+    .requireValueInRange(qmatePlanListRange_(`職種名選択｜${row.commute}｜${row.company}｜${row.category}`, titles), true)
+    .setAllowInvalid(true).build());
+}
+
+// 候補の一覧を隠しシートの1列に書き、その範囲を返す。1行目は「職種名選択｜通勤｜会社｜7軽め」のような見出しで、
+// 同じ見出しの列があれば中身を書き直す（30日ルールで外れる職種名が日ごとに変わるため）
+function qmatePlanListRange_(key, values) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(QMATE_PLAN_LIST_SHEET);
+  if (!sh) {
+    sh = ss.insertSheet(QMATE_PLAN_LIST_SHEET);
+    sh.hideSheet();
+  }
+  const lastCol = sh.getLastColumn();
+  const head = lastCol ? sh.getRange(1, 1, 1, lastCol).getValues()[0].map(String) : [];
+  let col = head.indexOf(key) + 1;
+  if (!col) {
+    col = lastCol + 1;
+    if (col > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), col - sh.getMaxColumns());
+    sh.getRange(1, col).setValue(key);
+  }
+  const need = values.length + 1;
+  if (need > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), need - sh.getMaxRows());
+  if (sh.getLastRow() > 1) sh.getRange(2, col, sh.getLastRow() - 1, 1).clearContent();
+  sh.getRange(2, col, values.length, 1).setValues(values.map(v => [v]));
+  return sh.getRange(2, col, values.length, 1);
 }
 
 function qmatePlanWarnIfRecentlyUsed_(sh, cols, r) {
