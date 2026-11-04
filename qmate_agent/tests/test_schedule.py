@@ -153,9 +153,9 @@ class TestScheduleCommand(unittest.TestCase):
         for p in self.patches:
             p.stop()
 
-    def run_schedule(self, book, check=0, upload=0, **kw):
+    def run_schedule(self, book, check=0, upload=0, takedown=None, **kw):
         args = SimpleNamespace(date="2026-10-30", row=None, status=None, count=None, dry_run=False,
-                               headed=False, force=False, yes=True)
+                               headed=False, force=False, yes=True, no_takedown=False)
         vars(args).update(kw)
         books = []
 
@@ -166,8 +166,10 @@ class TestScheduleCommand(unittest.TestCase):
                 mock.patch.object(sc, "GasRunner") as gas, \
                 mock.patch.object(cli, "cmd_check", return_value=check) as c, \
                 mock.patch.object(cli, "cmd_upload", return_value=upload) as u, \
+                mock.patch.object(cli, "_takedown", return_value=takedown or {"count": 0}) as td, \
                 mock.patch("builtins.print"):
             code = cli.cmd_schedule(args)
+        self.takedown = td
         return code, gas, c, u, books
 
     def test_todays_row_is_generated_checked_and_uploaded(self):
@@ -198,6 +200,32 @@ class TestScheduleCommand(unittest.TestCase):
         dorm_id = TARGETS["入寮"]["spreadsheet_id"]
         self.assertIn(dorm_id, books)
         self.assertEqual((c.call_args.args[0].spreadsheet_id, u.call_args.args[0].spreadsheet_id), (dorm_id, dorm_id))
+
+    def test_takedown_once_per_company_before_upload(self):
+        # 3行目は入稿ステータス空欄（=公開）。入稿の前に1回だけ前回分を取り下げる
+        book = FakeBook("✅完了 → 出力_X")
+        code, _, _, u, _ = self.run_schedule(book)
+        self.assertEqual(code, 0)
+        self.takedown.assert_called_once()
+        self.assertEqual(self.takedown.call_args.args[0], "AspiRove株式会社")
+
+    def test_draft_rows_do_not_take_down(self):
+        # 下書きだけの試運転では、本番の公開原稿を消さない
+        book = FakeBook("✅完了 → 出力_X")
+        self.run_schedule(book, status="下書き")
+        self.takedown.assert_not_called()
+
+    def test_failed_takedown_blocks_upload(self):
+        book = FakeBook("✅完了 → 出力_X")
+        code, _, _, u, _ = self.run_schedule(book, takedown=RuntimeError("テンプレート出力が失敗しました"))
+        self.assertEqual(code, 2)
+        u.assert_not_called()
+        self.assertIn("取り下げに失敗", book.results[3])
+
+    def test_no_takedown_option(self):
+        book = FakeBook("✅完了 → 出力_X")
+        self.run_schedule(book, no_takedown=True)
+        self.takedown.assert_not_called()
 
     def test_row_option_ignores_date(self):
         book = FakeBook("✅完了 → 出力_X")

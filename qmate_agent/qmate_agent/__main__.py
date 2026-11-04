@@ -3,7 +3,8 @@
     python -m qmate_agent check --sheet 出力_G1_...      # チェック → output/ にレポートと CSV
     python -m qmate_agent upload --sheet 出力_G1_... --dry-run   # 入稿前の最終確認だけ
     python -m qmate_agent upload --sheet 出力_G1_...      # Q-mate に CSV を入稿
-    python -m qmate_agent schedule                     # 入稿予定表の今日の行を生成 → チェック → 入稿
+    python -m qmate_agent schedule                     # 入稿予定表の今日の行を生成 → チェック → 取り下げ → 入稿
+    python -m qmate_agent takedown --company AspiRove株式会社   # 今の「公開」の原稿を Q-mate から取り下げる
 """
 import argparse
 import json
@@ -232,12 +233,25 @@ def cmd_schedule(args) -> int:
             print("\n".join(missing))
             return 1
         runners[c] = sc.GasRunner(url, token)
+    # 前回分の取り下げは、会社ごとに1回だけ、その会社の最初の入稿の前に行う。
+    # 下書きだけの行（試運転）しかない会社では行わない（本番の公開原稿を消さないため）
+    td = settings.get("takedown", {})
+    takedown_companies = set()
+    if td.get("enabled") and not args.no_takedown:
+        for p in targets:
+            st = args.status or p.status or gas_targets[commutes[p.row]].get("defaults", {}).get("ステータス")
+            if st == "公開":
+                takedown_companies.add(p.company)
+    if takedown_companies:
+        print(f"※ {'、'.join(sorted(takedown_companies))} は、入稿の前に Q-mate にある"
+              f"「{td['export_status']}」の原稿をすべて取り下げます（{td['update_type']}）")
     if not args.yes and input("原稿を生成して Q-mate に入稿します。よろしいですか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
 
     run_id = datetime.now().strftime("%H%M")
     failed = 0
+    takedown_done = {}
     for p in targets:
         c = commutes[p.row]
         t = gas_targets[c]
@@ -264,6 +278,10 @@ def cmd_schedule(args) -> int:
                 if cmd_check(SimpleNamespace(sheet=name, csv=None, no_ai=not settings.get("require_ai_check"),
                                              one_segment=True, spreadsheet_id=t["spreadsheet_id"])) == 2:
                     raise RuntimeError(f"{name} のチェック結果が NG のため入稿しません。レポートを確認してください")
+                if p.company in takedown_companies and p.company not in takedown_done:
+                    takedown_done[p.company] = _takedown(p.company, settings, args.headed, args.dry_run)
+                if isinstance(takedown_done.get(p.company), Exception):
+                    raise RuntimeError(f"前回分の取り下げに失敗したため、入稿しません: {takedown_done[p.company]}")
                 print(f"\n--- 入稿: {name} ---")
                 if cmd_upload(SimpleNamespace(sheet=name, dry_run=args.dry_run, headed=args.headed, yes=True,
                                               spreadsheet_id=t["spreadsheet_id"])) != 0:
@@ -279,6 +297,50 @@ def cmd_schedule(args) -> int:
         book.write_plan_result(p.row, result)
     print(f"\n完了: {len(targets) - failed}件 成功 / {failed}件 失敗")
     return 0 if not failed else 2
+
+
+def _takedown(company: str, settings: dict, headed: bool, dry_run: bool):
+    """1社分の取り下げ。結果の dict か、失敗したときは例外を返す（同じ会社の次の行でも使う）。"""
+    from . import takedown
+
+    print(f"\n--- 前回分の取り下げ: {company} ---")
+    try:
+        result = takedown.run(company, settings, config.OUTPUT_DIR, headed=headed, dry_run=dry_run)
+    except Exception as e:
+        print(f"取り下げに失敗しました: {e}")
+        return e
+    if not dry_run:
+        _record_takedown(result)
+    return result
+
+
+def _record_takedown(result: dict) -> None:
+    history = _state("takedown.json")
+    history.setdefault(result["company"], []).append(result)
+    _save_state("takedown.json", history)
+
+
+def cmd_takedown(args) -> int:
+    from . import takedown
+
+    settings = config.load("settings.json")
+    td = settings["takedown"]
+    if not args.yes and not args.dry_run and input(
+            f"{args.company} の Q-mate にある「{td['export_status']}」の原稿をすべて「{td['update_type']}」します。"
+            "元には戻せません。よろしいですか？ [y/N] > ").strip().lower() != "y":
+        print("中止しました")
+        return 1
+    try:
+        result = takedown.run(args.company, settings, config.OUTPUT_DIR, headed=args.headed, dry_run=args.dry_run)
+    except Exception as e:
+        print(f"失敗: {e}")
+        return 2
+    if args.dry_run:
+        print("--dry-run のため、取り込みはしていません")
+    else:
+        _record_takedown(result)
+        print(f"取り下げました: {result['count']}件")
+    return 0
 
 
 def main(argv=None) -> int:
@@ -310,7 +372,15 @@ def main(argv=None) -> int:
     s.add_argument("--headed", action="store_true", help="入稿のブラウザを表示する")
     s.add_argument("--force", action="store_true", help="実行済みの行ももう一度実行する")
     s.add_argument("--yes", action="store_true", help="実行前の確認を省く（毎日の自動実行用）")
+    s.add_argument("--no-takedown", action="store_true", help="前回分の取り下げをしない")
     s.set_defaults(func=cmd_schedule)
+
+    t = sub.add_parser("takedown", help="今 Q-mate に載っている原稿を取り下げる（削除する）")
+    t.add_argument("--company", required=True, help="会社名")
+    t.add_argument("--dry-run", action="store_true", help="取り出しとファイル分けまでで止める（Q-mate は変えない）")
+    t.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
+    t.add_argument("--yes", action="store_true", help="実行前の確認を省く")
+    t.set_defaults(func=cmd_takedown)
 
     args = ap.parse_args(argv)
     return args.func(args)

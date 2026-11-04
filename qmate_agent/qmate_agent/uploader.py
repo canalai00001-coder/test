@@ -83,6 +83,43 @@ class QmateUploader:
                 page.goto(self.cfg["upload_url"])
         return text
 
+    def export_template(self, status: str, out_path: Path) -> Path:
+        """CSV取込画面のテンプレート出力で、今 Q-mate にある原稿を CSV で取り出す。
+
+        「出力予約」を押すと裏で出力が作られるので、「最後に受付したテンプレート出力」の欄が
+        押す前と変わって成功になるまで読み込み直し、ダウンロードして out_path に保存する。
+        """
+        log_sel = self.cfg["export_log_selector"]
+        with sync_playwright() as p:
+            browser = launch(p, self.headless)
+            page = browser.new_context(accept_downloads=True).new_page()
+            page.set_default_timeout(self.cfg.get("timeout_ms", 60000))
+            try:
+                self._login(page)
+                page.goto(self.cfg["upload_url"])
+                before = page.locator(log_sel).first.inner_text()
+                page.select_option(self.cfg["export_status_selector"], label=status)
+                page.click(self.cfg["export_button_selector"])
+                page.wait_for_load_state("networkidle")
+                times = self.cfg.get("export_poll_times", 120)
+                for i in range(times + 1):
+                    text = page.locator(log_sel).first.inner_text()
+                    if text != before and re.search(self.cfg["error_pattern"], text):
+                        raise RuntimeError(f"テンプレート出力が失敗しました: {text}")
+                    if text != before and re.search(self.cfg["success_pattern"], text):
+                        break
+                    if i == times:
+                        raise RuntimeError("時間内にテンプレート出力が終わりませんでした")
+                    time.sleep(self.cfg.get("result_poll_interval_ms", 5000) / 1000)
+                    page.goto(self.cfg["upload_url"])
+                with page.expect_download() as d:
+                    page.locator(log_sel).first.locator("a", has_text="ダウンロード").first.click()
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                d.value.save_as(str(out_path))
+            finally:
+                browser.close()
+        return out_path
+
     def upload(self, csv_path: Path, label: str) -> UploadResult:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         shot = self.out_dir / f"{label}_入稿結果.png"

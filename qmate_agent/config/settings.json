@@ -50,6 +50,15 @@
       }
     }
   },
+  "_takedown_説明": "前回入稿した原稿の取り下げ。テンプレート出力で export_status の原稿を取り出し、更新種別を update_type、ステータスを status にして、chunk_rows 件ずつ取り込む。schedule では、その会社の行に「公開」があるときだけ、新しい原稿を入稿する前に行う（下書きだけの試運転では行わない）。",
+  "takedown": {
+    "enabled": true,
+    "export_status": "公開",
+    "update_type": "削除",
+    "status": "終了",
+    "chunk_rows": 10000,
+    "result_poll_times": 360
+  },
   "qmate": {
     "login_url": "https://m.q-mate.jp/user_sessions/new?layout=login",
     "id_selectors": ["#login_id", "input[type='email']", "input[name*='email']", "input[name*='login']"],
@@ -60,6 +69,10 @@
     "file_input_selector": "#file",
     "upload_button_selector": "#csv_import_submit",
     "result_selector": "#csv_import_log",
+    "export_status_selector": "#template_export_form select[name=status]",
+    "export_button_selector": "#btn_template_export",
+    "export_log_selector": "#template_export_log",
+    "export_poll_times": 360,
     "success_pattern": "成功",
     "error_pattern": "エラー|失敗|不正|できません",
     "result_poll_interval_ms": 5000,

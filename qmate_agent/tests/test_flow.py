@@ -122,6 +122,15 @@ PAGES = {
 }
 
 
+def export_log():
+    if not Handler.export_status:
+        return "公開 成功 2026/10/27 20:46:44 <a href=/dl?old=1>ダウンロード</a>"
+    if Handler.export_pending:
+        Handler.export_pending -= 1
+        return f"{Handler.export_status} 処理中 2026/11/04 15:00:00"
+    return f"{Handler.export_status} 成功 2026/11/04 15:00:00 <a href=/dl>ダウンロード</a>"
+
+
 def import_page():
     # Q-mate の CSV取込画面に合わせた仮の画面。取り込みは受付後に裏で処理され、
     # 「最後に受付したCSV取込」の欄が 処理中 → 成功 / エラー と変わる。
@@ -138,6 +147,10 @@ def import_page():
     return ("<form method=post action=/import enctype=multipart/form-data><input type=file name=file id=file>"
             f"<input type=submit id=csv_import_submit value=アップロード{disabled}></form>"
             f"<div id=csv_import_log>最後に受付したCSV取込 {log}</div>"
+            "<form id=template_export_form method=post action=/export><select name=status>"
+            "<option>下書き＋公開</option><option>公開</option></select>"
+            "<input type=submit id=btn_template_export value=出力予約></form>"
+            f"<div id=template_export_log>最後に受付したテンプレート出力 {export_log()}</div>"
             "<p>テンプレート出力 成功</p>")
 
 
@@ -147,6 +160,8 @@ class Handler(BaseHTTPRequestHandler):
     pending = 0
     final = ""
     busy = 0  # 前の取り込みの処理中で、アップロードボタンが押せない回数
+    export_status = ""  # テンプレート出力で選ばれたステータス（空なら前回の出力だけがある状態）
+    export_pending = 0
 
     def _send(self, code, body="", location=None):
         self.send_response(code)
@@ -160,6 +175,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if path == "/dl":
+            data = ("\ufeffUID,更新種別|必須,ステータス|必須\r\n" +
+                    ("u1,,公開\r\n" if "old" not in self.path else "old,,公開\r\n")).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/csv")
+            self.send_header("Content-Disposition", "attachment; filename=template.csv")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         self._send(200, import_page() if path == "/import" else PAGES.get(path, "not found"))
 
     def do_POST(self):
@@ -167,6 +192,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/user_sessions":
             ok = b"password=pw" in body
             return self._send(302, location="/home" if ok else "/user_sessions/new")
+        if self.path == "/export":
+            from urllib.parse import parse_qs
+            Handler.export_status = parse_qs(body.decode())["status"][0]
+            Handler.export_pending = 2
+            return self._send(302, location="/import")
         Handler.uploaded = body
         Handler.log = "x.csv {status} 2026/10/27 21:00:00"
         Handler.pending = 2
@@ -218,6 +248,17 @@ class TestUploader(unittest.TestCase):
         Handler.busy = 0
         self.assertFalse(r.ok)
         self.assertIn("まだ処理中", r.message)
+
+    def test_export_template_waits_and_downloads_new_file(self):
+        from qmate_agent.uploader import QmateUploader
+        tmp = Path(tempfile.mkdtemp())
+        cfg = dict(self.cfg, export_status_selector="#template_export_form select[name=status]",
+                   export_button_selector="#btn_template_export", export_log_selector="#template_export_log")
+        with mock.patch.dict(os.environ, {"QMATE_ID": "a@example.com", "QMATE_PASSWORD": "pw"}):
+            path = QmateUploader(cfg, out_dir=tmp).export_template("公開", tmp / "x.csv")
+        self.assertEqual(Handler.export_status, "公開")
+        # 前回の出力（old）ではなく、今回出力したファイルを落としている
+        self.assertIn("u1,,公開", path.read_text(encoding="utf-8-sig"))
 
     def test_gives_up_while_processing(self):
         r = self.upload(table(clean_row()), result_poll_times=1)
