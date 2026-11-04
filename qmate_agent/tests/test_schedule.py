@@ -13,7 +13,8 @@ from qmate_agent import schedule as sc
 RULES = config.load("rules.json")
 TARGETS = config.load("settings.json")["schedule_targets"]
 TODAY = date(2026, 10, 30)
-HEAD = ["実行日", "会社", "職種", "夜勤有無", "通勤/入寮", "雇用形態", "入稿ステータス", "原稿数", "職種名選択"]
+HEAD = ["実行日", "会社", "職種", "夜勤有無", "通勤/入寮", "雇用形態", "入稿ステータス", "原稿数",
+        "スタンバイキーワード\n(空欄=自動選択)", "求人ボックスワード", "職種名選択\n(6重め/7軽めのみ・必須)", "実行結果"]
 PLAN = [
     HEAD,
     ["", "AspiRove株式会社", "1クルマ", "TRUE", "通勤", "正社員", "下書き", "500"],
@@ -21,7 +22,8 @@ PLAN = [
     ["10/31", "AspiRove株式会社", "5半導体", "FALSE", "", "", "", "200"],
     ["", "", "", "FALSE"],
 ]
-DORM = ["2026/10/30", "AspiRove株式会社", "7軽め", "FALSE", "入寮", "", "", "900", "防犯カメラの検査"]
+DORM = ["2026/10/30", "AspiRove株式会社", "7軽め", "FALSE", "入寮", "", "", "900", "急募で新生活へ", "仕事探し寮付き",
+        "防犯カメラの検査"]
 
 
 def as_dict(plan, commute, **kw):
@@ -72,6 +74,16 @@ class TestPlan(unittest.TestCase):
         self.assertEqual((row["通勤か入寮か"], row["雇用形態"], row["画像カテゴリー"], row["給与パターン"]),
                          ("入寮", "契約社員（人材紹介）", "入寮", ""))
         self.assertEqual(row["職種名選択"], "7軽め｜防犯カメラの検査")
+        self.assertEqual((row["スタンバイキーワード"], row["求人ボックスワード"]), ("急募で新生活へ", "仕事探し寮付き"))
+
+    def test_header_name(self):
+        self.assertEqual(sc.header_name("職種名選択\n(6重め/7軽めのみ・必須)"), "職種名選択")
+        self.assertEqual(sc.header_name("スタンバイキーワード（空欄=自動選択）"), "スタンバイキーワード")
+        self.assertEqual(sc.header_name(" 通勤/入寮 "), "通勤/入寮")
+
+    def test_blank_words_use_defaults(self):
+        row = as_dict(sc.read_plan(PLAN, TODAY)[0], "通勤")
+        self.assertEqual((row["スタンバイキーワード"], row["求人ボックスワード"]), ("", "遠方からの応募可能"))
 
     def test_blank_commute_uses_default(self):
         plan = sc.read_plan(PLAN, TODAY)[2]

@@ -39,12 +39,15 @@ class PlanRow:
     employment: str = ""  # 正社員 / 契約社員 など
     status: str = ""      # 公開 / 下書き
     title_choice: str = ""  # 6重め・7軽めの職種名選択（「7軽め｜防犯カメラの検査」または職種名だけ）
+    standby_keyword: str = ""  # スタンバイキーワード（空欄なら GAS が自動で選ぶ）
+    box_word: str = ""         # 求人ボックスワード（空欄なら settings.json の defaults）
 
     @property
     def key(self) -> str:
         d = self.run_date.isoformat() if self.run_date else "日付なし"
         return "|".join([str(self.row), d, self.company, self.category, "夜勤あり" if self.night else "夜勤なし",
-                         str(self.count), self.commute, self.employment, self.status, self.title_choice])
+                         str(self.count), self.commute, self.employment, self.status, self.title_choice,
+                         self.standby_keyword, self.box_word])
 
 
 def parse_date(s, today: date) -> date | None:
@@ -69,10 +72,10 @@ def read_plan(table: list[list[str]], today: date) -> list[PlanRow]:
     """
     if not table:
         return []
-    head = [str(h).strip() for h in table[0]]
+    head = [header_name(h) for h in table[0]]
     col = {n: head.index(n) for n in ("実行日", "会社", "職種", "夜勤有無", "原稿数")}
     # あとから足した列。無ければ空欄として扱う
-    for n in ("通勤/入寮", "雇用形態", "入稿ステータス", "職種名選択"):
+    for n in ("通勤/入寮", "雇用形態", "入稿ステータス", "職種名選択", "スタンバイキーワード", "求人ボックスワード"):
         if n in head:
             col[n] = head.index(n)
     rows = []
@@ -85,8 +88,14 @@ def read_plan(table: list[list[str]], today: date) -> list[PlanRow]:
         rows.append(PlanRow(i, parse_date(raw_date, today), get("会社"), get("職種"),
                             get("夜勤有無").upper() == "TRUE", count,
                             get("通勤/入寮"), employment_type(get("雇用形態")), get("入稿ステータス"),
-                            get("職種名選択")))
+                            get("職種名選択"), get("スタンバイキーワード"), get("求人ボックスワード")))
     return rows
+
+
+def header_name(h) -> str:
+    """見出し「職種名選択\n(6重め/7軽めのみ・必須)」→「職種名選択」。改行やかっこの補足を除く。"""
+    s = str(h).strip().split("\n")[0]
+    return re.split(r"[（(]", s)[0].strip()
 
 
 def employment_type(s: str) -> str:
@@ -132,7 +141,8 @@ def config_row(plan: PlanRow, commute: str, target: dict, rules: dict, today: da
         "夜勤の有無": "夜勤あり" if plan.night else "夜勤なし",
         "職種名選択": title_choice(plan),
     }
-    for k, val in (("雇用形態", plan.employment), ("ステータス", status or plan.status)):
+    for k, val in (("雇用形態", plan.employment), ("ステータス", status or plan.status),
+                   ("スタンバイキーワード", plan.standby_keyword), ("求人ボックスワード", plan.box_word)):
         if val:
             v[k] = val
     for k in ("雇用形態", "更新種別", "ステータス", "画像カテゴリー", "スタンバイキーワード",
