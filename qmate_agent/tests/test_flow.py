@@ -126,13 +126,17 @@ def import_page():
     # Q-mate の CSV取込画面に合わせた仮の画面。取り込みは受付後に裏で処理され、
     # 「最後に受付したCSV取込」の欄が 処理中 → 成功 / エラー と変わる。
     log = Handler.log
+    disabled = ""
+    if Handler.busy:
+        Handler.busy -= 1
+        disabled = " disabled"
     if Handler.pending:
         Handler.pending -= 1
         log = log.replace("{status}", "処理中")
     else:
         log = log.replace("{status}", Handler.final)
     return ("<form method=post action=/import enctype=multipart/form-data><input type=file name=file id=file>"
-            "<input type=submit id=csv_import_submit value=アップロード></form>"
+            f"<input type=submit id=csv_import_submit value=アップロード{disabled}></form>"
             f"<div id=csv_import_log>最後に受付したCSV取込 {log}</div>"
             "<p>テンプレート出力 成功</p>")
 
@@ -142,6 +146,7 @@ class Handler(BaseHTTPRequestHandler):
     log = "前回.csv 成功 2026/10/01 10:00:00"
     pending = 0
     final = ""
+    busy = 0  # 前の取り込みの処理中で、アップロードボタンが押せない回数
 
     def _send(self, code, body="", location=None):
         self.send_response(code)
@@ -200,6 +205,19 @@ class TestUploader(unittest.TestCase):
         r = self.upload(table(clean_row()))
         self.assertTrue(r.ok, r)
         self.assertIn("メラミン化粧板".encode(), Handler.uploaded)
+
+    def test_waits_until_previous_import_finishes(self):
+        Handler.busy = 2
+        r = self.upload(table(clean_row()))
+        self.assertTrue(r.ok, r)
+        self.assertEqual(Handler.busy, 0)
+
+    def test_gives_up_when_button_stays_disabled(self):
+        Handler.busy = 5
+        r = self.upload(table(clean_row()), result_poll_times=1)
+        Handler.busy = 0
+        self.assertFalse(r.ok)
+        self.assertIn("まだ処理中", r.message)
 
     def test_gives_up_while_processing(self):
         r = self.upload(table(clean_row()), result_poll_times=1)

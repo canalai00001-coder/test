@@ -59,6 +59,17 @@ class QmateUploader:
         loc = page.locator(self.cfg.get("result_selector", "body"))
         return loc.first.inner_text() if loc.count() else ""
 
+    def _wait_ready(self, page: Page) -> None:
+        """前の取り込みを処理している間は、Q-mate がアップロードボタンを押せなくするので、押せるまで読み込み直す。"""
+        times = self.cfg.get("result_poll_times", 0)
+        for i in range(times + 1):
+            if page.locator(self.cfg["upload_button_selector"]).first.is_enabled():
+                return
+            if i < times:
+                time.sleep(self.cfg.get("result_poll_interval_ms", 5000) / 1000)
+                page.goto(self.cfg["upload_url"])
+        raise RuntimeError("前の CSV 取込がまだ処理中で、アップロードボタンが押せません。しばらくしてからやり直してください")
+
     def _wait_result(self, page: Page, before: str) -> str:
         """結果欄が取り込み前と変わり、成功かエラーの文言が出るまで読み込み直す。"""
         times = self.cfg.get("result_poll_times", 0)
@@ -82,6 +93,7 @@ class QmateUploader:
             try:
                 self._login(page)
                 page.goto(self.cfg["upload_url"])
+                self._wait_ready(page)
                 before = self._result_text(page)
                 page.set_input_files(self.cfg["file_input_selector"], str(csv_path))
                 page.click(self.cfg["upload_button_selector"])
