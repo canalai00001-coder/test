@@ -206,6 +206,12 @@ def wait_generated(book, row: int, col: int, timeout_s: int, interval_s: int, lo
         text = book.config_status(row, col)
         if text.startswith("✅") or text.startswith("❌"):
             return text
+        # GAS は全体の進み具合を、実行状況の列の1行目（通勤用は Q1、入寮用は P1）に書く。
+        # 予約行に届く前にエラーで止まると、予約行の実行状況は空欄のままなので、ここで気づく
+        overall = book.config_status(1, col)
+        if overall.startswith("⏹") or overall.startswith("❌"):
+            raise RuntimeError(f"GAS がエラーで止まりました（実行設定の1行目: {overall}）。"
+                               "そのスプレッドシートでメニューの③を押すと、エラーの内容が表示されます")
         if time.monotonic() >= deadline:
             raise TimeoutError(f"{timeout_s // 60}分待っても生成が終わりませんでした（実行設定 {row}行目: {text or '空欄'}）")
         log(f"  生成を待っています（実行設定 {row}行目: {text or '待機中'}）")

@@ -122,6 +122,8 @@ class FakeBook:
         return 5
 
     def config_status(self, row, col):
+        if row == 1:
+            return getattr(self, "overall", "")
         self.status_cols.append(col)
         return self.status
 
@@ -221,6 +223,14 @@ class TestScheduleCommand(unittest.TestCase):
         book = FakeBook("", plan=[HEAD, ["2026/10/30", "ArK株式会社", "8梱包", "FALSE", "通勤", "", "", "10"]])
         self.assertEqual(self.run_schedule(book)[0], 1)
         self.assertEqual(book.appended, [])
+
+    def test_gas_stopped_before_reaching_row(self):
+        book = FakeBook("", plan=[HEAD, DORM])
+        book.overall = "⏹ 停止中(エラーのため停止。もう一度「③」を実行してください) (14:04:24時点)"
+        code, _, c, _, _ = self.run_schedule(book)
+        self.assertEqual(code, 2)
+        c.assert_not_called()
+        self.assertIn("GAS がエラーで止まりました", book.results[2])
 
     def test_other_pending_rows_stop_generation(self):
         # 入寮用の実行設定に、人が入れた未実行の予約行が残っているときは生成しない
