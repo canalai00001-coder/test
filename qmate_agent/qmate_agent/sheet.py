@@ -78,6 +78,15 @@ class Spreadsheet:
         ws.update([values], f"A{row}", value_input_option="USER_ENTERED")
         return row
 
+    def pending_config_rows(self, status_col: int) -> list[int]:
+        """実行設定で、予約が入っているのに実行状況が空欄の行（GAS が次に生成する行）の行番号。"""
+        from .schedule import CONFIG_DATA_START_ROW
+
+        table = self.book.worksheet(self.settings["config_sheet"]).get_all_values()
+        return [i for i, r in enumerate(table, start=1)
+                if i >= CONFIG_DATA_START_ROW and any(c.strip() for c in r[:6])
+                and not (r[status_col - 1].strip() if len(r) >= status_col else "")]
+
     def config_status(self, row: int, col: int) -> str:
         return (self.book.worksheet(self.settings["config_sheet"]).cell(row, col).value or "").strip()
 

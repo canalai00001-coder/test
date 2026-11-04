@@ -159,6 +159,18 @@ def title_choice(plan: PlanRow) -> str:
     return f"{plan.category}｜{t}"
 
 
+def row_ranges(rows: list[int]) -> str:
+    """[4, 5, 6, 9] → 「4〜6、9」"""
+    parts, start = [], None
+    for i, r in enumerate(rows):
+        if start is None:
+            start = r
+        if i + 1 == len(rows) or rows[i + 1] != r + 1:
+            parts.append(str(start) if start == r else f"{start}〜{r}")
+            start = None
+    return "、".join(parts)
+
+
 def output_sheets(status_text: str) -> list[str]:
     """実行状況「✅完了(…) 500件 → 出力_A, 出力_B」から出力シート名を取り出す。"""
     if "→" not in status_text:

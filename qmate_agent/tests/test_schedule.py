@@ -95,6 +95,10 @@ class TestPlan(unittest.TestCase):
         with self.assertRaises(ValueError):
             sc.config_row(sc.PlanRow(2, None, "A社", "6重め", True, 5), "通勤", TARGETS["通勤"], RULES, TODAY, "0900")
 
+    def test_row_ranges(self):
+        self.assertEqual(sc.row_ranges([4, 5, 6, 9]), "4〜6、9")
+        self.assertEqual(sc.row_ranges([7]), "7")
+
     def test_output_sheets(self):
         self.assertEqual(sc.output_sheets("✅完了(2026-10-30 09:01) 500件 → 出力_A, 出力_B"), ["出力_A", "出力_B"])
         self.assertEqual(sc.output_sheets("❌エラー: 会社名が空です"), [])
@@ -103,9 +107,12 @@ class TestPlan(unittest.TestCase):
 class FakeBook:
     """入稿予定表のある本体と、生成先のスプレッドシートを兼ねる。"""
 
-    def __init__(self, status, plan=None):
-        self.status, self.plan = status, plan or PLAN
+    def __init__(self, status, plan=None, pending=None):
+        self.status, self.plan, self.pending = status, plan or PLAN, pending or []
         self.appended, self.results, self.status_cols = [], {}, []
+
+    def pending_config_rows(self, col):
+        return self.pending
 
     def plan_table(self):
         return self.plan
@@ -214,6 +221,15 @@ class TestScheduleCommand(unittest.TestCase):
         book = FakeBook("", plan=[HEAD, ["2026/10/30", "ArK株式会社", "8梱包", "FALSE", "通勤", "", "", "10"]])
         self.assertEqual(self.run_schedule(book)[0], 1)
         self.assertEqual(book.appended, [])
+
+    def test_other_pending_rows_stop_generation(self):
+        # 入寮用の実行設定に、人が入れた未実行の予約行が残っているときは生成しない
+        book = FakeBook("✅完了 → 出力_X", plan=[HEAD, DORM], pending=[4, 5, 6, 13])
+        code, gas, c, _, _ = self.run_schedule(book)
+        self.assertEqual(code, 2)
+        self.assertEqual(book.appended, [])
+        gas.return_value.run.assert_not_called()
+        self.assertIn("4〜6、13行目", book.results[2])
 
     def test_missing_dorm_url_stops_before_anything(self):
         book = FakeBook("", plan=[HEAD, DORM])

@@ -239,6 +239,11 @@ def cmd_schedule(args) -> int:
         print(f"\n=== 入稿予定表 {p.row}行目（{c}） ===")
         try:
             values = sc.config_row(p, c, t, rules, today, run_id, args.status, args.count)
+            # GAS は実行状況が空欄の行をすべて生成するので、ほかの未実行の予約行があると一緒に作られてしまう
+            others = gen_book.pending_config_rows(sc.status_column(c))
+            if others:
+                raise RuntimeError(f"{c}用スプレッドシートの実行設定に、未実行の予約行（{sc.row_ranges(others)}行目）があります。"
+                                   "このまま生成すると一緒に作られてしまうため止めました。その行を実行するか消してから、もう一度実行してください")
             config_row = gen_book.append_config_row(values)
             print(f"{c}用スプレッドシートの実行設定 {config_row}行目に予約しました。GAS で生成します")
             runners[c].run()
