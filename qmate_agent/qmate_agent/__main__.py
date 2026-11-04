@@ -220,10 +220,16 @@ def cmd_schedule(args) -> int:
     runners = {}
     for c in sorted(set(commutes.values())):
         t = gas_targets[c]
-        url, token = t.get("gas_webapp_url", ""), os.environ.get(t["token_env"], "")
-        if not url.startswith("https://") or not token:
-            print(f"{c}用の GAS のウェブアプリの URL（settings.json の schedule_targets の {c} の gas_webapp_url）と、"
-                  f"環境変数 {t['token_env']} を設定してください")
+        url, token = t.get("gas_webapp_url", "").strip(), os.environ.get(t["token_env"], "").strip()
+        missing = []
+        if not url.startswith("https://"):
+            missing.append(f"・{c}用の GAS のウェブアプリの URL が settings.json に入っていません"
+                           f"（schedule_targets の「{c}」の gas_webapp_url。今の値: {url or '空欄'}）")
+        if not token:
+            missing.append(f"・{c}用の合言葉が登録されていません（setx {t['token_env']} 合言葉 で登録し、"
+                           "コマンドプロンプトを開き直してください）")
+        if missing:
+            print("\n".join(missing))
             return 1
         runners[c] = sc.GasRunner(url, token)
     if not args.yes and input("原稿を生成して Q-mate に入稿します。よろしいですか？ [y/N] > ").strip().lower() != "y":
