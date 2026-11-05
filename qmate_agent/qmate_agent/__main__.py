@@ -527,7 +527,8 @@ def cmd_login_test(args) -> int:
     try:
         cfg = qmate_config(settings, args.company)
         print(f"{args.company} のログイン情報で Q-mate にログインします（{cfg['upload_url']}）")
-        title = QmateUploader(cfg, headless=not args.headed).check_login()
+        title = QmateUploader(cfg, headless=not args.headed,
+                              out_dir=config.OUTPUT_DIR / f"ログイン確認_{args.company}").check_login()
     except Exception as e:
         print(f"失敗: {e}")
         return 2

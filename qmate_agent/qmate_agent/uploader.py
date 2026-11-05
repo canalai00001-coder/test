@@ -56,11 +56,27 @@ class QmateUploader:
         page.wait_for_load_state("networkidle")
         if "user_sessions" in page.url:
             raise RuntimeError("ログインできませんでした。ID・パスワードを確認してください")
+        self.after_login_url = page.url
         # CSV取込画面の co が分からないとき（ログイン情報シートの URL 欄が空欄）は、ログイン後の画面のリンクから探す
         if "co=" not in self.cfg["upload_url"]:
             co = self._find_co(page)
             if co:
                 self.cfg = dict(self.cfg, upload_url=f"{self.cfg['upload_url']}?co={co}")
+
+    @staticmethod
+    def _links(page: Page) -> list:
+        """画面のリンク（文字とアドレス）。CSV取込画面への行き方を調べるため。"""
+        try:
+            pairs = page.eval_on_selector_all(
+                "a[href]", "els => els.map(e => [(e.innerText || '').trim().slice(0, 30), e.getAttribute('href')])")
+        except Exception:
+            return []
+        seen, out = set(), []
+        for t, h in pairs:
+            if h and not h.startswith(("#", "javascript", "mailto")) and h not in seen:
+                seen.add(h)
+                out.append((t.replace("\n", " "), h))
+        return out
 
     @staticmethod
     def _find_co(page: Page) -> str:
@@ -151,9 +167,19 @@ class QmateUploader:
             page.set_default_timeout(self.cfg.get("timeout_ms", 60000))
             try:
                 self._login(page)
+                links = self._links(page)
                 page.goto(self.cfg["upload_url"])
                 if "user_sessions" in page.url or not page.locator(self.cfg["upload_button_selector"]).count():
-                    raise RuntimeError("ログインはできましたが、CSV取込画面を開けませんでした。会社番号（co=）を確認してください")
+                    self.out_dir.mkdir(parents=True, exist_ok=True)
+                    shot = self.out_dir / "ログイン確認_開けなかった画面.png"
+                    page.screenshot(path=str(shot), full_page=True)
+                    raise RuntimeError(
+                        "ログインはできましたが、CSV取込画面を開けませんでした。会社番号（co=）を確認してください\n"
+                        f"  ログイン直後の画面: {getattr(self, 'after_login_url', '')}\n"
+                        f"  CSV取込画面を開こうとして移った画面: {page.title()}（{page.url}）\n"
+                        f"  ログイン直後の画面にあったリンク（{len(links)}件）:\n"
+                        + "\n".join(f"    {t} → {h}" for t, h in links[:40])
+                        + f"\n  画面の写真: {shot}")
                 return f"{page.title()}（{page.url}）"
             finally:
                 browser.close()
