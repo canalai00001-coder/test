@@ -188,6 +188,7 @@ class QmateUploader:
                         f"  ログイン直後の画面にあったリンク（{len(links)}件）:\n"
                         + "\n".join(f"    {t} → {h}" for t, h in links[:40])
                         + f"\n  画面の写真: {shot}")
+                self.opened_url = page.url
                 return f"{page.title()}（{page.url}）"
             finally:
                 browser.close()

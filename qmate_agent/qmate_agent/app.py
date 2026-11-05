@@ -339,6 +339,8 @@ def make_handler(app: App):
                 if u.path == "/api/accounts/delete":
                     return self._send(200, app.delete_account(body))
                 if u.path == "/api/login_test":
+                    if body.get("all"):
+                        return self._send(200, app.run("ログインの確認：全社", ["login-test", "--all"]))
                     return self._send(200, app.run(f"ログインの確認：{body['company']}",
                                                    ["login-test", "--company", body["company"]]))
                 if u.path == "/api/engine":
@@ -437,6 +439,9 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
       そのスプレッドシートが「リンクを知っている全員」に共有されているあいだは、シートのパスワードは使いません。</p>
     <p class="note">シートに無い会社は、下の欄で登録できます（このパソコンだけで使います。パスワードは Windows の資格情報マネージャーに保存）。
       会社名は入稿予定表・取り下げ予定表の「会社」と同じにしてください。</p>
+    <div class="row"><button class="btn primary" onclick="start('/api/login_test',{all:true})">全社まとめてログインを確かめる</button>
+      <button class="btn" onclick="loadAccounts()">一覧を読み直す</button></div>
+    <p class="note">成功した会社で、ログイン情報シートの CSV取込画面の URL が空欄なら、開けた画面の URL を書き込みます（入っている URL は変えません）。</p>
     <div id="acc_list"></div>
     <div class="row">
       <label>会社名<input id="a_company" placeholder="例：AspiRove株式会社"></label>

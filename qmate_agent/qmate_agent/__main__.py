@@ -519,22 +519,39 @@ def cmd_compare(args) -> int:
 
 
 def cmd_login_test(args) -> int:
-    """登録した会社のログイン情報で、Q-mate にログインして CSV取込画面を開けるか確かめる（何も変えない）。"""
-    from .accounts import qmate_config
+    """会社のログイン情報で Q-mate にログインして、CSV取込画面を開けるか確かめる（原稿は変えない）。
+
+    ログイン情報シートの会社で URL 欄が空欄なら、開けた CSV取込画面の URL を書き込む。
+    """
+    from . import accounts
     from .uploader import QmateUploader
 
     settings = config.load("settings.json")
-    try:
-        cfg = qmate_config(settings, args.company)
-        print(f"{args.company} のログイン情報で Q-mate にログインします（{cfg['upload_url']}）")
-        title = QmateUploader(cfg, headless=not args.headed,
-                              out_dir=config.OUTPUT_DIR / f"ログイン確認_{args.company}").check_login()
-    except Exception as e:
-        print(f"失敗: {e}")
-        return 2
-    print(f"成功: CSV取込画面を開けました: {title}")
-    print("画面のアドレスの co= の番号が、この会社のものか確かめてください")
-    return 0
+    names = accounts.companies(settings) if args.all else [args.company]
+    if not names:
+        print("ログイン情報が登録されている会社がありません")
+        return 1
+    failed = []
+    for name in names:
+        print(f"\n--- {name} ---")
+        try:
+            cfg = accounts.qmate_config(settings, name)
+            print(f"ログインします（{cfg['upload_url']}）")
+            up = QmateUploader(cfg, headless=not args.headed, out_dir=config.OUTPUT_DIR / f"ログイン確認_{name}")
+            title = up.check_login()
+        except Exception as e:
+            print(f"失敗: {e}")
+            failed.append(name)
+            continue
+        print(f"成功: CSV取込画面を開けました: {title}")
+        try:
+            if name in accounts.sheet_status(settings)["rows"] and accounts.fill_url(settings, name, up.opened_url):
+                print(f"ログイン情報シートの URL 欄に書き込みました: {up.opened_url}")
+        except Exception as e:
+            print(f"（ログイン情報シートへの書き込みはできませんでした: {e}）")
+    if len(names) > 1:
+        print(f"\n{len(names)}社中 {len(names) - len(failed)}社 成功" + (f"。失敗: {'、'.join(failed)}" if failed else ""))
+    return 2 if failed else 0
 
 
 def main(argv=None) -> int:
@@ -577,7 +594,9 @@ def main(argv=None) -> int:
     cp.set_defaults(func=cmd_compare)
 
     lt = sub.add_parser("login-test", help="会社のログイン情報で Q-mate にログインできるか確かめる")
-    lt.add_argument("--company", required=True, help="会社名")
+    g = lt.add_mutually_exclusive_group(required=True)
+    g.add_argument("--company", help="会社名")
+    g.add_argument("--all", action="store_true", help="ログイン情報がある会社をすべて確かめる")
     lt.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
     lt.set_defaults(func=cmd_login_test)
 

@@ -80,6 +80,34 @@ def parse_sheet(values: list) -> dict:
     return rows
 
 
+def fill_url(settings: dict, company: str, url: str) -> bool:
+    """ログイン情報シートのその会社の URL 欄が空欄なら、url を書く。書いたら True。"""
+    if "co=" not in url:
+        return False
+    import gspread
+
+    try:
+        ws = _sheet_book(settings).worksheet(settings.get("accounts_sheet", SHEET))
+    except gspread.WorksheetNotFound:
+        return False
+    values = ws.get_all_values()
+    if not values:
+        return False
+    head = [str(h).strip() for h in values[0]]
+    ci = next((i for i, h in enumerate(head) if "会社" in h), None)
+    ui = next((i for i, h in enumerate(head) if "URL" in h or "co" in h), None)
+    if ci is None or ui is None:
+        return False
+    for r, row in enumerate(values[1:], start=2):
+        if (row[ci].strip() if ci < len(row) else "") == company:
+            if (row[ui].strip() if ui < len(row) else ""):
+                return False
+            ws.update_cell(r, ui + 1, url)
+            _sheet_cache.clear()
+            return True
+    return False
+
+
 def _path():
     return config.CONFIG_DIR / FILE
 

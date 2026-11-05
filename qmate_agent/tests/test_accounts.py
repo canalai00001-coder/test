@@ -126,3 +126,20 @@ class TestSheetAccounts(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "制限付き"):
             accounts.qmate_config(dict(SETTINGS, spreadsheet_id="x"), "ArK株式会社")
         self.assertIn("公開", accounts.listing(dict(SETTINGS, spreadsheet_id="x"))[0]["source"])
+
+
+class TestFillUrl(unittest.TestCase):
+    def test_writes_only_blank_url(self):
+        values = [["会社名", "ログインID", "パスワード", "CSV取込画面のURL（またはco=の番号）"],
+                  ["A社", "a@example.com", "pw", ""],
+                  ["B社", "b@example.com", "pw", "https://m.q-mate.jp/job_offers/bulk_new?co=1"]]
+        written = []
+        ws = types.SimpleNamespace(get_all_values=lambda: values, update_cell=lambda r, c, v: written.append((r, c, v)))
+        book = types.SimpleNamespace(worksheet=lambda n: ws)
+        url = "https://m.q-mate.jp/job_offers/bulk_new?co=23836"
+        with mock.patch.object(accounts, "_sheet_book", return_value=book):
+            self.assertTrue(accounts.fill_url(SETTINGS, "A社", url))
+            self.assertFalse(accounts.fill_url(SETTINGS, "B社", url))   # 入っている URL は変えない
+            self.assertFalse(accounts.fill_url(SETTINGS, "C社", url))   # シートに無い会社
+            self.assertFalse(accounts.fill_url(SETTINGS, "A社", "https://m.q-mate.jp/job_offers"))  # co が無い
+        self.assertEqual(written, [(2, 4, url)])
