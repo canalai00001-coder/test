@@ -195,14 +195,36 @@ def cmd_schedule(args) -> int:
         for p in skipped:
             print(f"入稿予定表 {p.row}行目は {done[p.key]['finished_at']} に実行済みです（やり直すときは --force）")
         targets = [p for p in targets if p.key not in done]
-    if not targets:
-        print(f"入稿予定表に、{today:%Y/%m/%d} に実行する行がありません")
+    # 取り下げ予定表（入稿はせず、取り下げだけをする行）。--row で入稿予定表の行を指定したときは動かさない
+    td_sheet = settings.get("takedown_sheet", "取り下げ予定表")
+    td_rows = sc.read_takedown_plan(book.plan_table(td_sheet), today)
+    if args.takedown_row:
+        td_targets = [r for r in td_rows if r.row == args.takedown_row]
+    elif args.row:
+        td_targets = []
+    else:
+        td_targets = [r for r in td_rows if r.run_date == today]
+    if not args.force:
+        for r in [r for r in td_targets if r.key in done]:
+            print(f"取り下げ予定表 {r.row}行目は {done[r.key]['finished_at']} に実行済みです（やり直すときは --force）")
+        td_targets = [r for r in td_targets if r.key not in done]
+    if not targets and not td_targets:
+        print(f"入稿予定表・取り下げ予定表に、{today:%Y/%m/%d} に実行する行がありません")
         return 0
 
     company = settings["qmate"].get("company")
     gas_targets = settings["schedule_targets"]
     commutes = {}
-    print(f"入稿予定表から {len(targets)}件 を実行します")
+    from .takedown import describe
+    for r in td_targets:
+        print(f"取り下げ予定表 {r.row}行目: {r.company} / {describe(r.date_from, r.date_to)}"
+              f"{f' / メモに「{r.memo}」を含む' if r.memo else ''} / 対象ステータス "
+              f"{r.status or settings['takedown']['export_status']} → 取り下げ（{settings['takedown']['update_type']}）")
+        if company and r.company != company:
+            print(f"入稿先に設定している会社（{company}）と違うため実行できません。settings.json の qmate を確認してください")
+            return 1
+    if targets:
+        print(f"入稿予定表から {len(targets)}件 を実行します")
     for p in targets:
         try:
             commutes[p.row] = sc.commute_of(p, settings.get("schedule_default_commute", "通勤"))
@@ -242,16 +264,34 @@ def cmd_schedule(args) -> int:
             st = args.status or p.status or gas_targets[commutes[p.row]].get("defaults", {}).get("ステータス")
             if st == "公開":
                 takedown_companies.add(p.company)
+    # 取り下げ予定表に今日の行がある会社は、その行の指定（期間など）で取り下げるので、入稿前の取り下げはしない
+    takedown_companies -= {r.company for r in td_targets}
     if takedown_companies:
         print(f"※ {'、'.join(sorted(takedown_companies))} は、入稿の前に Q-mate にある"
               f"「{td['export_status']}」の原稿をすべて取り下げます（{td['update_type']}）")
-    if not args.yes and input("原稿を生成して Q-mate に入稿します。よろしいですか？ [y/N] > ").strip().lower() != "y":
+    question = "原稿を生成して Q-mate に入稿します" if targets else "Q-mate の原稿を取り下げます（元には戻せません）"
+    if not args.yes and input(f"{question}。よろしいですか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
 
     run_id = datetime.now().strftime("%H%M")
     failed = 0
     takedown_done = {}
+    for r in td_targets:
+        print(f"\n=== 取り下げ予定表 {r.row}行目 ===")
+        res = _takedown(r.company, settings, args.headed, args.dry_run, date_from=r.date_from, date_to=r.date_to,
+                        memo=r.memo, export_status=r.status or None)
+        if isinstance(res, Exception):
+            failed += 1
+            text = f"失敗（{datetime.now():%m/%d %H:%M}）{res}"
+        else:
+            text = (f"{'取り出しと分割まで' if args.dry_run else '取り下げ済み'}（{datetime.now():%m/%d %H:%M}）"
+                    f"{res['count']}件 / {res['span']}")
+            if not args.dry_run:
+                done[r.key] = {"count": res["count"], "finished_at": datetime.now().isoformat(timespec="seconds")}
+                _save_state("schedule.json", done)
+        print(text)
+        book.write_plan_result(r.row, text, sheet=td_sheet)
     for p in targets:
         c = commutes[p.row]
         t = gas_targets[c]
@@ -295,17 +335,20 @@ def cmd_schedule(args) -> int:
             result = f"失敗（{datetime.now():%m/%d %H:%M}）{e}"
             print(result)
         book.write_plan_result(p.row, result)
-    print(f"\n完了: {len(targets) - failed}件 成功 / {failed}件 失敗")
+    print(f"\n完了: {len(targets) + len(td_targets) - failed}件 成功 / {failed}件 失敗")
     return 0 if not failed else 2
 
 
-def _takedown(company: str, settings: dict, headed: bool, dry_run: bool):
-    """1社分の取り下げ。結果の dict か、失敗したときは例外を返す（同じ会社の次の行でも使う）。"""
+def _takedown(company: str, settings: dict, headed: bool, dry_run: bool, **filters):
+    """1社分の取り下げ。結果の dict か、失敗したときは例外を返す（同じ会社の次の行でも使う）。
+
+    filters は takedown.run の date_from・date_to・memo・export_status（取り下げ予定表の行の指定）。
+    """
     from . import takedown
 
-    print(f"\n--- 前回分の取り下げ: {company} ---")
+    print(f"\n--- 取り下げ: {company} ---")
     try:
-        result = takedown.run(company, settings, config.OUTPUT_DIR, headed=headed, dry_run=dry_run)
+        result = takedown.run(company, settings, config.OUTPUT_DIR, headed=headed, dry_run=dry_run, **filters)
     except Exception as e:
         print(f"取り下げに失敗しました: {e}")
         return e
@@ -325,13 +368,18 @@ def cmd_takedown(args) -> int:
 
     settings = config.load("settings.json")
     td = settings["takedown"]
+    date_from = date.fromisoformat(args.date or args.date_from) if (args.date or args.date_from) else None
+    date_to = date.fromisoformat(args.date or args.date_to) if (args.date or args.date_to) else None
+    status = args.status or td["export_status"]
     if not args.yes and not args.dry_run and input(
-            f"{args.company} の Q-mate にある「{td['export_status']}」の原稿をすべて「{td['update_type']}」します。"
+            f"{args.company} の Q-mate にある「{status}」の原稿のうち、{takedown.describe(date_from, date_to)}"
+            f"{f'・メモに「{args.memo}」を含む' if args.memo else ''}ものを「{td['update_type']}」します。"
             "元には戻せません。よろしいですか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
     try:
-        result = takedown.run(args.company, settings, config.OUTPUT_DIR, headed=args.headed, dry_run=args.dry_run)
+        result = takedown.run(args.company, settings, config.OUTPUT_DIR, headed=args.headed, dry_run=args.dry_run,
+                              date_from=date_from, date_to=date_to, memo=args.memo or "", export_status=status)
     except Exception as e:
         print(f"失敗: {e}")
         return 2
@@ -372,11 +420,17 @@ def main(argv=None) -> int:
     s.add_argument("--headed", action="store_true", help="入稿のブラウザを表示する")
     s.add_argument("--force", action="store_true", help="実行済みの行ももう一度実行する")
     s.add_argument("--yes", action="store_true", help="実行前の確認を省く（毎日の自動実行用）")
-    s.add_argument("--no-takedown", action="store_true", help="前回分の取り下げをしない")
+    s.add_argument("--no-takedown", action="store_true", help="入稿前の前回分の取り下げをしない")
+    s.add_argument("--takedown-row", type=int, help="取り下げ予定表のこの行だけを、実行日に関係なく実行する")
     s.set_defaults(func=cmd_schedule)
 
     t = sub.add_parser("takedown", help="今 Q-mate に載っている原稿を取り下げる（削除する）")
     t.add_argument("--company", required=True, help="会社名")
+    t.add_argument("--date", help="求人メモの作成日がこの日の原稿だけ（YYYY-MM-DD）")
+    t.add_argument("--from", dest="date_from", help="求人メモの作成日がこの日から（YYYY-MM-DD）")
+    t.add_argument("--to", dest="date_to", help="求人メモの作成日がこの日まで（YYYY-MM-DD）")
+    t.add_argument("--memo", help="メモにこの文字を含む原稿だけ")
+    t.add_argument("--status", help="取り出すステータス（省略時は settings.json の takedown.export_status）")
     t.add_argument("--dry-run", action="store_true", help="取り出しとファイル分けまでで止める（Q-mate は変えない）")
     t.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
     t.add_argument("--yes", action="store_true", help="実行前の確認を省く")

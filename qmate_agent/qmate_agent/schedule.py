@@ -98,6 +98,47 @@ def header_name(h) -> str:
     return re.split(r"[（(]", s)[0].strip()
 
 
+@dataclass
+class TakedownRow:
+    """取り下げ予定表の1行（入稿はせず、前に入れた原稿を取り下げるだけ）。"""
+    row: int
+    run_date: date | None
+    company: str
+    date_from: date | None  # 求人メモの作成日がこの日から
+    date_to: date | None    # この日まで（どちらも空欄なら全期間）
+    memo: str = ""          # メモにこの文字を含む原稿だけ
+    status: str = ""        # 取り出すステータス（空欄なら settings.json の takedown.export_status）
+
+    @property
+    def key(self) -> str:
+        f = lambda d: d.isoformat() if d else ""
+        return "|".join(["取り下げ", str(self.row), f(self.run_date), self.company, f(self.date_from), f(self.date_to),
+                         self.memo, self.status])
+
+
+def read_takedown_plan(table: list[list], today: date) -> list[TakedownRow]:
+    """取り下げ予定表（1行目が見出し）から、会社が入っている行を読む。"""
+    if not table:
+        return []
+    head = [header_name(h) for h in table[0]]
+    col = {n: head.index(n) for n in ("実行日", "会社") if n in head}
+    if len(col) < 2:
+        return []
+    for n in ("作成日から", "作成日まで", "メモに含む文字", "対象ステータス"):
+        if n in head:
+            col[n] = head.index(n)
+    raw = lambda r, n: r[col[n]] if n in col and col[n] < len(r) else ""
+    rows = []
+    for i, r in enumerate(table[1:], start=2):
+        company = str(raw(r, "会社")).strip()
+        if not company:
+            continue
+        d = lambda n: parse_date(raw(r, n), today) if str(raw(r, n)).strip() else None
+        rows.append(TakedownRow(i, d("実行日"), company, d("作成日から"), d("作成日まで"),
+                                str(raw(r, "メモに含む文字")).strip(), str(raw(r, "対象ステータス")).strip()))
+    return rows
+
+
 def employment_type(s: str) -> str:
     """「正社員」→「正社員（人材紹介）」のように、実行設定（Q-mate）の表記にそろえる。"""
     s = s.strip()

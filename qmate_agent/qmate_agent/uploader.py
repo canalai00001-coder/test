@@ -83,7 +83,7 @@ class QmateUploader:
                 page.goto(self.cfg["upload_url"])
         return text
 
-    def export_template(self, status: str, out_path: Path) -> Path:
+    def export_template(self, status: str, out_path: Path, memo: str = "") -> Path:
         """CSV取込画面のテンプレート出力で、今 Q-mate にある原稿を CSV で取り出す。
 
         「出力予約」を押すと裏で出力が作られるので、「最後に受付したテンプレート出力」の欄が
@@ -99,6 +99,7 @@ class QmateUploader:
                 page.goto(self.cfg["upload_url"])
                 before = page.locator(log_sel).first.inner_text()
                 page.select_option(self.cfg["export_status_selector"], label=status)
+                page.fill(self.cfg["export_memo_selector"], memo)
                 page.click(self.cfg["export_button_selector"])
                 page.wait_for_load_state("networkidle")
                 times = self.cfg.get("export_poll_times", 120)

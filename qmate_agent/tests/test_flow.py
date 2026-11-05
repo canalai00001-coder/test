@@ -147,7 +147,7 @@ def import_page():
     return ("<form method=post action=/import enctype=multipart/form-data><input type=file name=file id=file>"
             f"<input type=submit id=csv_import_submit value=アップロード{disabled}></form>"
             f"<div id=csv_import_log>最後に受付したCSV取込 {log}</div>"
-            "<form id=template_export_form method=post action=/export><select name=status>"
+            "<form id=template_export_form method=post action=/export><input name=memo><select name=status>"
             "<option>下書き＋公開</option><option>公開</option></select>"
             "<input type=submit id=btn_template_export value=出力予約></form>"
             f"<div id=template_export_log>最後に受付したテンプレート出力 {export_log()}</div>"
@@ -162,6 +162,7 @@ class Handler(BaseHTTPRequestHandler):
     busy = 0  # 前の取り込みの処理中で、アップロードボタンが押せない回数
     export_status = ""  # テンプレート出力で選ばれたステータス（空なら前回の出力だけがある状態）
     export_pending = 0
+    export_memo = None
 
     def _send(self, code, body="", location=None):
         self.send_response(code)
@@ -194,7 +195,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(302, location="/home" if ok else "/user_sessions/new")
         if self.path == "/export":
             from urllib.parse import parse_qs
-            Handler.export_status = parse_qs(body.decode())["status"][0]
+            q = parse_qs(body.decode(), keep_blank_values=True)
+            Handler.export_status, Handler.export_memo = q["status"][0], q["memo"][0]
             Handler.export_pending = 2
             return self._send(302, location="/import")
         Handler.uploaded = body
@@ -253,10 +255,11 @@ class TestUploader(unittest.TestCase):
         from qmate_agent.uploader import QmateUploader
         tmp = Path(tempfile.mkdtemp())
         cfg = dict(self.cfg, export_status_selector="#template_export_form select[name=status]",
-                   export_button_selector="#btn_template_export", export_log_selector="#template_export_log")
+                   export_button_selector="#btn_template_export", export_log_selector="#template_export_log",
+                   export_memo_selector="#template_export_form input[name=memo]")
         with mock.patch.dict(os.environ, {"QMATE_ID": "a@example.com", "QMATE_PASSWORD": "pw"}):
-            path = QmateUploader(cfg, out_dir=tmp).export_template("公開", tmp / "x.csv")
-        self.assertEqual(Handler.export_status, "公開")
+            path = QmateUploader(cfg, out_dir=tmp).export_template("公開", tmp / "x.csv", memo="-261104-")
+        self.assertEqual((Handler.export_status, Handler.export_memo), ("公開", "-261104-"))
         # 前回の出力（old）ではなく、今回出力したファイルを落としている
         self.assertIn("u1,,公開", path.read_text(encoding="utf-8-sig"))
 

@@ -6,7 +6,9 @@ from pathlib import Path
 
 from qmate_agent import takedown
 
-HEADER = ["UID", "更新種別|必須", "ステータス|必須", "職種名|必須", "仕事内容|必須"]
+from datetime import date
+
+HEADER = ["UID", "更新種別|必須", "ステータス|必須", "職種名|必須", "仕事内容|必須", "メモ"]
 
 
 def export_file(rows: int, no_uid_at=None) -> Path:
@@ -15,7 +17,8 @@ def export_file(rows: int, no_uid_at=None) -> Path:
         w = csv.writer(f)
         w.writerow(HEADER)
         for i in range(rows):
-            w.writerow(["" if i == no_uid_at else f"uid{i}", "", "公開", f"職種{i}", "改行を\n含む仕事内容"])
+            memo = f"22-2610{20 + i % 5:02d}-2-2-7A-1495-1868-38-兵庫県芦屋市-AspiRove株式会社/G"
+            w.writerow(["" if i == no_uid_at else f"uid{i}", "", "公開", f"職種{i}", "改行を\n含む仕事内容", memo])
     return path
 
 
@@ -47,6 +50,23 @@ class TestChunks(unittest.TestCase):
     def test_empty_export(self):
         paths, total = takedown.make_chunks(export_file(0), Path(tempfile.mkdtemp()), "x", "削除", "終了")
         self.assertEqual((paths, total), ([], 0))
+
+    def test_period_filter(self):
+        # メモの作成日は 10/20〜10/24 が5件ずつ。10/21〜10/22 だけを取り下げる
+        keep = takedown.row_filter(date(2026, 10, 21), date(2026, 10, 22))
+        paths, total = takedown.make_chunks(export_file(25), Path(tempfile.mkdtemp()), "x", "削除", "終了", keep=keep)
+        self.assertEqual(total, 10)
+        self.assertTrue(all(r[5].split("-")[1] in ("261021", "261022") for r in read(paths[0])[1:]))
+
+    def test_memo_date_and_query(self):
+        self.assertEqual(takedown.memo_date("22-261104-1-1-7A-x"), date(2026, 11, 4))
+        self.assertIsNone(takedown.memo_date("手書きのメモ"))
+        self.assertEqual(takedown.memo_filter(date(2026, 11, 4), date(2026, 11, 4)), "-261104-")
+        self.assertEqual(takedown.memo_filter(date(2026, 11, 1), date(2026, 11, 4)), "")
+        self.assertEqual(takedown.memo_filter(None, None, "-2-2-7"), "-2-2-7")
+        # 期間を指定したとき、作成日が読めないメモの原稿は取り下げない
+        self.assertFalse(takedown.row_filter(date(2026, 11, 1), None)("手書きのメモ"))
+        self.assertTrue(takedown.row_filter(None, None, "-2-2-7")("22-261104-2-2-7A"))
 
     def test_other_company_refused(self):
         settings = {"takedown": {}, "qmate": {"company": "AspiRove株式会社"}, "csv": {}}

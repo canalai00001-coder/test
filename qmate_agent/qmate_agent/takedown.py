@@ -8,17 +8,56 @@ Q-mate は1つの会社のアカウントに載せられる原稿の数に上限
   4. 分けたファイルを1つずつ取り込む
 """
 import csv
-from datetime import datetime
+import re
+from datetime import date, datetime
 from pathlib import Path
 
 from .checks import base_name
 
 
+def memo_date(memo: str) -> date | None:
+    """求人メモ「22-261104-1-1-7A-…」の2番目（作成日 YYMMDD）を日付にする。読めなければ None。"""
+    parts = (memo or "").split("-")
+    if len(parts) < 2 or not re.fullmatch(r"\d{6}", parts[1].strip()):
+        return None
+    try:
+        return datetime.strptime(parts[1].strip(), "%y%m%d").date()
+    except ValueError:
+        return None
+
+
+def memo_filter(date_from: date | None, date_to: date | None, memo: str = "") -> str:
+    """Q-mate のテンプレート出力のメモ欄に入れる文字。1日だけなら「-261104-」で Q-mate 側で絞る。"""
+    if memo:
+        return memo
+    if date_from and date_from == date_to:
+        return f"-{date_from:%y%m%d}-"
+    return ""
+
+
+def row_filter(date_from: date | None, date_to: date | None, memo: str = ""):
+    """取り出した行のうち、取り下げる行かどうかを決める関数（メモ列の値を受け取る）。
+
+    作成日を指定したときは、メモの作成日が読めない行と期間外の行は取り下げない。
+    """
+    def keep(memo_value: str) -> bool:
+        if memo and memo not in memo_value:
+            return False
+        if date_from or date_to:
+            d = memo_date(memo_value)
+            if d is None or (date_from and d < date_from) or (date_to and d > date_to):
+                return False
+        return True
+    return keep
+
+
 def make_chunks(src: Path, out_dir: Path, label: str, update_type: str, status: str,
-                chunk_rows: int = 10000, encoding: str = "utf-8", newline: str = "\r\n") -> tuple[list[Path], int]:
+                chunk_rows: int = 10000, encoding: str = "utf-8", newline: str = "\r\n",
+                keep=None) -> tuple[list[Path], int]:
     """取り出した CSV の更新種別とステータスを書き換え、chunk_rows 件ずつのファイルに分ける。
 
     ファイルは数百 MB になることがあるので、1行ずつ読みながら書き出す。UID のない行は消せないので飛ばす。
+    keep を渡すと、メモ列の値で keep が True を返す行だけを残す。
     戻り値は（分けたファイルのリスト, 取り下げる件数）。
     """
     csv.field_size_limit(2 ** 31 - 1)
@@ -32,8 +71,11 @@ def make_chunks(src: Path, out_dir: Path, label: str, update_type: str, status: 
             return [], 0
         names = [base_name(h) for h in header]
         uid, kind, st = names.index("UID"), names.index("更新種別"), names.index("ステータス")
+        memo = names.index("メモ") if "メモ" in names else None
         for row in reader:
             if len(row) <= max(uid, kind, st) or not row[uid].strip():
+                continue
+            if keep and not keep(row[memo] if memo is not None and memo < len(row) else ""):
                 continue
             if total % chunk_rows == 0:
                 if f:
@@ -52,8 +94,13 @@ def make_chunks(src: Path, out_dir: Path, label: str, update_type: str, status: 
 
 
 def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_run: bool = False,
-        log=print) -> dict:
-    """1社分の取り下げ。dry_run なら取り出しとファイル分けまでで止める。結果を dict で返す。"""
+        log=print, date_from: date | None = None, date_to: date | None = None, memo: str = "",
+        export_status: str | None = None) -> dict:
+    """1社分の取り下げ。dry_run なら取り出しとファイル分けまでで止める。結果を dict で返す。
+
+    date_from / date_to：求人メモの作成日がこの期間の原稿だけを取り下げる（どちらも省略で全期間）。
+    memo：メモにこの文字を含む原稿だけ（Q-mate のメモ欄にも入れて絞る）。
+    """
     from .uploader import QmateUploader
 
     td = settings["takedown"]
@@ -66,13 +113,18 @@ def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_
     cfg = dict(q, result_poll_times=td.get("result_poll_times", q.get("result_poll_times", 0)))
     up = QmateUploader(cfg, headless=not headed, out_dir=out_dir)
 
-    log(f"Q-mate のテンプレート出力で「{td['export_status']}」の原稿を取り出します")
-    src = up.export_template(td["export_status"], out_dir / f"{label}_取り出し.csv")
+    status = export_status or td["export_status"]
+    query = memo_filter(date_from, date_to, memo)
+    span = describe(date_from, date_to)
+    log(f"Q-mate のテンプレート出力で「{status}」の原稿を取り出します（{span}"
+        f"{f'、メモ「{query}」で絞り込み' if query else ''}）")
+    src = up.export_template(status, out_dir / f"{label}_取り出し.csv", memo=query)
+    keep = row_filter(date_from, date_to, memo) if (date_from or date_to or memo) else None
     chunks, total = make_chunks(src, out_dir, label, td["update_type"], td["status"], td.get("chunk_rows", 10000),
-                                **settings["csv"])
+                                keep=keep, **settings["csv"])
     log(f"取り下げる原稿: {total}件（{len(chunks)}ファイルに分けました）")
     result = {"company": company, "count": total, "files": [str(c) for c in chunks], "uploaded": 0,
-              "at": datetime.now().isoformat(timespec="seconds")}
+              "span": span, "memo": query, "at": datetime.now().isoformat(timespec="seconds")}
     if dry_run or not chunks:
         return result
     for i, path in enumerate(chunks, start=1):
@@ -82,3 +134,11 @@ def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_
             raise RuntimeError(f"取り下げの取り込みに失敗しました（{path.name}）: {r.message}")
         result["uploaded"] = i
     return result
+
+
+def describe(date_from: date | None, date_to: date | None) -> str:
+    if not date_from and not date_to:
+        return "作成日：全期間"
+    if date_from == date_to:
+        return f"作成日：{date_from:%Y/%m/%d}"
+    return f"作成日：{f'{date_from:%Y/%m/%d}' if date_from else ''}〜{f'{date_to:%Y/%m/%d}' if date_to else ''}"

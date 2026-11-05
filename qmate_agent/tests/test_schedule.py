@@ -107,15 +107,16 @@ class TestPlan(unittest.TestCase):
 class FakeBook:
     """入稿予定表のある本体と、生成先のスプレッドシートを兼ねる。"""
 
-    def __init__(self, status, plan=None, pending=None):
+    def __init__(self, status, plan=None, pending=None, takedown_plan=None):
         self.status, self.plan, self.pending = status, plan or PLAN, pending or []
-        self.appended, self.results, self.status_cols = [], {}, []
+        self.takedown_plan = takedown_plan or []
+        self.appended, self.results, self.status_cols, self.takedown_results = [], {}, [], {}
 
     def pending_config_rows(self, col):
         return self.pending
 
-    def plan_table(self):
-        return self.plan
+    def plan_table(self, sheet=None):
+        return self.takedown_plan if sheet == "取り下げ予定表" else self.plan
 
     def append_config_row(self, values):
         self.appended.append(values)
@@ -127,8 +128,8 @@ class FakeBook:
         self.status_cols.append(col)
         return self.status
 
-    def write_plan_result(self, row, text):
-        self.results[row] = text
+    def write_plan_result(self, row, text, sheet=None):
+        (self.takedown_results if sheet == "取り下げ予定表" else self.results)[row] = text
 
 
 class TestScheduleCommand(unittest.TestCase):
@@ -155,7 +156,7 @@ class TestScheduleCommand(unittest.TestCase):
 
     def run_schedule(self, book, check=0, upload=0, takedown=None, **kw):
         args = SimpleNamespace(date="2026-10-30", row=None, status=None, count=None, dry_run=False,
-                               headed=False, force=False, yes=True, no_takedown=False)
+                               headed=False, force=False, yes=True, no_takedown=False, takedown_row=None)
         vars(args).update(kw)
         books = []
 
@@ -166,7 +167,7 @@ class TestScheduleCommand(unittest.TestCase):
                 mock.patch.object(sc, "GasRunner") as gas, \
                 mock.patch.object(cli, "cmd_check", return_value=check) as c, \
                 mock.patch.object(cli, "cmd_upload", return_value=upload) as u, \
-                mock.patch.object(cli, "_takedown", return_value=takedown or {"count": 0}) as td, \
+                mock.patch.object(cli, "_takedown", return_value=takedown or {"count": 0, "span": "作成日：全期間"}) as td, \
                 mock.patch("builtins.print"):
             code = cli.cmd_schedule(args)
         self.takedown = td
@@ -226,6 +227,35 @@ class TestScheduleCommand(unittest.TestCase):
         book = FakeBook("✅完了 → 出力_X")
         self.run_schedule(book, no_takedown=True)
         self.takedown.assert_not_called()
+
+    def test_takedown_only_rows(self):
+        # 取り下げ予定表だけに今日の行がある：入稿はせず、指定の期間で取り下げる
+        tplan = [["実行日", "会社", "作成日から", "作成日まで", "メモに含む文字", "対象ステータス", "実行結果"],
+                 ["2026/10/30", "AspiRove株式会社", "2026/10/01", "2026/10/22", "", "", ""],
+                 ["2026/11/01", "AspiRove株式会社", "", "", "", "", ""]]
+        book = FakeBook("", plan=[HEAD], takedown_plan=tplan)
+        code, gas, c, u, _ = self.run_schedule(book, takedown={"count": 120, "span": "作成日：2026/10/01〜2026/10/22"})
+        self.assertEqual(code, 0)
+        self.takedown.assert_called_once()
+        kw = self.takedown.call_args.kwargs
+        self.assertEqual((kw["date_from"], kw["date_to"]), (date(2026, 10, 1), date(2026, 10, 22)))
+        gas.return_value.run.assert_not_called()
+        self.assertIn("取り下げ済み", book.takedown_results[2])
+        self.assertIn("120件", book.takedown_results[2])
+        # 2回目は実行済みとして飛ばす
+        book2 = FakeBook("", plan=[HEAD], takedown_plan=tplan)
+        self.run_schedule(book2)
+        self.takedown.assert_not_called()
+
+    def test_takedown_row_replaces_auto_takedown(self):
+        # 同じ会社の取り下げ予定表の行があれば、入稿前の自動の取り下げ（全件）はしない
+        tplan = [["実行日", "会社", "作成日から", "作成日まで"], ["2026/10/30", "AspiRove株式会社", "2026/10/22", "2026/10/22"]]
+        book = FakeBook("✅完了 → 出力_X", takedown_plan=tplan)
+        code, _, _, u, _ = self.run_schedule(book)
+        self.assertEqual(code, 0)
+        self.takedown.assert_called_once()
+        self.assertEqual(self.takedown.call_args.kwargs["date_from"], date(2026, 10, 22))
+        u.assert_called_once()
 
     def test_row_option_ignores_date(self):
         book = FakeBook("✅完了 → 出力_X")
