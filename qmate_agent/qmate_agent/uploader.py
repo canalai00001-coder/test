@@ -56,6 +56,26 @@ class QmateUploader:
         page.wait_for_load_state("networkidle")
         if "user_sessions" in page.url:
             raise RuntimeError("ログインできませんでした。ID・パスワードを確認してください")
+        # CSV取込画面の co が分からないとき（ログイン情報シートの URL 欄が空欄）は、ログイン後の画面のリンクから探す
+        if "co=" not in self.cfg["upload_url"]:
+            co = self._find_co(page)
+            if co:
+                self.cfg = dict(self.cfg, upload_url=f"{self.cfg['upload_url']}?co={co}")
+
+    @staticmethod
+    def _find_co(page: Page) -> str:
+        m = re.search(r"[?&]co=(\d+)", page.url)
+        if m:
+            return m.group(1)
+        cos = set()
+        for href in page.eval_on_selector_all("a[href*='co=']", "els => els.map(e => e.getAttribute('href'))"):
+            m = re.search(r"[?&]co=(\d+)", href or "")
+            if m:
+                cos.add(m.group(1))
+        if len(cos) > 1:
+            raise RuntimeError(f"このアカウントでは複数の会社（co={', '.join(sorted(cos))}）を扱えます。"
+                               "ログイン情報シートの URL 欄に、入稿する会社の CSV取込画面の URL を入れてください")
+        return cos.pop() if cos else ""
 
     def _result_text(self, page: Page) -> str:
         loc = page.locator(self.cfg.get("result_selector", "body"))
@@ -134,7 +154,7 @@ class QmateUploader:
                 page.goto(self.cfg["upload_url"])
                 if "user_sessions" in page.url or not page.locator(self.cfg["upload_button_selector"]).count():
                     raise RuntimeError("ログインはできましたが、CSV取込画面を開けませんでした。会社番号（co=）を確認してください")
-                return page.title()
+                return f"{page.title()}（{page.url}）"
             finally:
                 browser.close()
 

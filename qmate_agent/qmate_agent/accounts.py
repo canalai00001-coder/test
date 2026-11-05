@@ -19,6 +19,7 @@ from . import config
 SERVICE = "qmate_agent"
 FILE = "accounts.local.json"
 UPLOAD_URL = "https://m.q-mate.jp/job_offers/bulk_new?co={co}"
+UPLOAD_URL_NO_CO = "https://m.q-mate.jp/job_offers/bulk_new"  # co が空欄のとき（ログイン後の画面から co を探す）
 
 
 SHEET = "Q-mateログイン情報"
@@ -73,8 +74,9 @@ def parse_sheet(values: list) -> dict:
         company, login_id = cell(r, ci), cell(r, ii)
         if not company or not login_id:
             continue
-        co = parse_co(cell(r, ui))
-        rows[company] = {"login_id": login_id, "password": cell(r, pi), "co": co, "upload_url": UPLOAD_URL.format(co=co)}
+        co = parse_co(cell(r, ui)) if cell(r, ui) else ""
+        rows[company] = {"login_id": login_id, "password": cell(r, pi), "co": co,
+                         "upload_url": UPLOAD_URL.format(co=co) if co else UPLOAD_URL_NO_CO}
     return rows
 
 

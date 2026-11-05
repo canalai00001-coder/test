@@ -92,7 +92,8 @@ class FakeBook:
 SHEET_VALUES = [["会社名", "ログインID", "パスワード", "CSV取込画面のURL（またはco=の番号）", "メモ"],
                 ["ArK株式会社", "ark@example.com", "sheetpw", "https://m.q-mate.jp/job_offers/bulk_new?co=22222", ""],
                 ["", "", "", "", "空行"],
-                ["B社", "b@example.com", "", "333", ""]]
+                ["B社", "b@example.com", "", "333", ""],
+                ["C社", "c@example.com", "cpw", "", "URL は空欄"]]
 
 
 class TestSheetAccounts(unittest.TestCase):
@@ -110,11 +111,14 @@ class TestSheetAccounts(unittest.TestCase):
         q = accounts.qmate_config(dict(SETTINGS, spreadsheet_id="x"), "ArK株式会社")
         self.assertEqual((q["login_id"], q["password"], q["upload_url"]),
                          ("ark@example.com", "sheetpw", "https://m.q-mate.jp/job_offers/bulk_new?co=22222"))
-        self.assertEqual(accounts.companies(dict(SETTINGS, spreadsheet_id="x")), ["ArK株式会社", "B社"])
+        self.assertEqual(accounts.companies(dict(SETTINGS, spreadsheet_id="x")), ["ArK株式会社", "B社", "C社"])
+        self.assertEqual(accounts.qmate_config(dict(SETTINGS, spreadsheet_id="x"), "C社")["upload_url"],
+                         "https://m.q-mate.jp/job_offers/bulk_new")
         self.assertIn("空欄", accounts.login_problem(dict(SETTINGS, spreadsheet_id="x"), "B社"))
         listed = accounts.listing(dict(SETTINGS, spreadsheet_id="x"))
         self.assertEqual([(a["company"], a["password"], a["source"]) for a in listed],
-                         [("ArK株式会社", True, "スプレッドシート"), ("B社", False, "スプレッドシート")])
+                         [("ArK株式会社", True, "スプレッドシート"), ("B社", False, "スプレッドシート"),
+                          ("C社", True, "スプレッドシート")])
         self.assertNotIn("sheetpw", json.dumps(listed, ensure_ascii=False))
 
     def test_link_shared_sheet_is_refused(self):

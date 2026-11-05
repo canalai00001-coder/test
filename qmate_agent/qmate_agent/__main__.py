@@ -531,7 +531,8 @@ def cmd_login_test(args) -> int:
     except Exception as e:
         print(f"失敗: {e}")
         return 2
-    print(f"成功: CSV取込画面を開けました（画面のタイトル: {title}）")
+    print(f"成功: CSV取込画面を開けました: {title}")
+    print("画面のアドレスの co= の番号が、この会社のものか確かめてください")
     return 0
 
 

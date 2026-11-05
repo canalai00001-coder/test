@@ -118,7 +118,7 @@ class TestUploadGate(unittest.TestCase):
 PAGES = {
     "/user_sessions/new": "<form method=post action=/user_sessions><input type=email name=email>"
                           "<input type=password name=password><button type=submit>ログイン</button></form>",
-    "/home": "<p>ホーム</p>",
+    "/home": "<p>ホーム</p><a href='/import?co=27859'>CSV取込</a>",
 }
 
 
@@ -239,6 +239,10 @@ class TestUploader(unittest.TestCase):
         with mock.patch.dict(os.environ, keep, clear=True):
             # 環境変数がなくても、会社ごとに登録したログイン情報（cfg の login_id・password）で入れる
             self.assertTrue(QmateUploader(dict(self.cfg, login_id="ark@example.com", password="pw")).check_login() is not None)
+            # URL 欄が空欄（co なし）でも、ログイン後の画面のリンクから co を見つけて CSV取込画面を開く
+            got = QmateUploader(dict(self.cfg, upload_url=self.cfg["upload_url"], login_id="ark@example.com",
+                                     password="pw")).check_login()
+            self.assertIn("co=27859", got)
             with self.assertRaisesRegex(RuntimeError, "ログインできませんでした"):
                 QmateUploader(dict(self.cfg, login_id="ark@example.com", password="ng")).check_login()
             with self.assertRaisesRegex(RuntimeError, "会社」タブ"):
