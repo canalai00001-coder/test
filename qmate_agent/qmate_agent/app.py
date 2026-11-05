@@ -5,6 +5,7 @@
   - 取り下げ：会社・作成日の期間・メモを指定して、Q-mate の原稿を取り下げる
   - 更新：GitHub に新しい版があるかを確かめ、ボタン1つで最新にする（ダウンロードした ZIP からも更新できる）
   - 比較：GAS で作った出力シートと、同じ予約内容でツールが作った原稿を見比べる（生成をツールに切り替える前の確認）
+  - 原稿の作り方：通勤の原稿を GAS で作るかツールで作るかを切り替える（settings.local.json に保存）
   - 設定の確認：ログイン情報・合言葉・ウェブアプリの URL・サービスアカウントの鍵がそろっているか
 
 実行そのものは、これまでと同じコマンド（python -m qmate_agent schedule など）を裏で動かし、
@@ -100,6 +101,22 @@ class App:
         t = settings["schedule_targets"]["通勤"]
         return Spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"])).output_sheet_names()
 
+    # ---- 原稿の作り方（GAS / ツール） ----
+    ENGINE_TARGETS = ("通勤",)  # ツールで作れるもの。入寮はまだ GAS だけ
+
+    def engines(self) -> dict:
+        targets = config.load("settings.json")["schedule_targets"]
+        return {k: targets[k].get("engine", "gas") for k in self.ENGINE_TARGETS if k in targets}
+
+    def set_engine(self, body: dict) -> dict:
+        target, engine = body.get("target"), body.get("engine")
+        if target not in self.ENGINE_TARGETS or engine not in ("gas", "python"):
+            raise ValueError("切り替えられない組み合わせです")
+        if self.job and self.job.code is None:
+            raise RuntimeError(f"「{self.job.title}」を実行中です。終わってから切り替えてください")
+        config.save_local("settings.json", {"schedule_targets": {target: {"engine": engine}}})
+        return self.engines()
+
     @staticmethod
     def _common(body: dict) -> list[str]:
         return (["--dry-run"] if body.get("dry_run") else []) + (["--headed"] if body.get("headed") else [])
@@ -125,7 +142,7 @@ class App:
             p["result"] = results["plan"].get(p["row"], "")
         for r in tds:
             r["result"] = results["takedown"].get(r["row"], "")
-        return {"today": fmt(today), "plans": plans, "takedowns": tds, "companies": [settings["qmate"].get("company")]}
+        return {"today": fmt(today), "plans": plans, "takedowns": tds, "engines": self.engines(), "companies": [settings["qmate"].get("company")]}
 
     @staticmethod
     def _results(book, settings) -> dict:
@@ -284,6 +301,8 @@ def make_handler(app: App):
                     return self._send(200, app.run(*app.takedown_args(body)))
                 if u.path == "/api/compare":
                     return self._send(200, app.run(f"比較：{body['sheet']}", ["compare", "--gas-sheet", body["sheet"]]))
+                if u.path == "/api/engine":
+                    return self._send(200, app.set_engine(body))
                 if u.path == "/api/update/github":
                     return self._send(200, app.update_from_github())
             except Exception as e:
@@ -347,7 +366,8 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
       <label><input type="checkbox" id="p_force"> 実行済みの行ももう一度実行する</label></div>
     <div class="row"><button class="btn primary" id="run_today">今日の行をすべて実行</button><button class="btn" onclick="load()">表を読み直す</button></div>
     <p class="note">黄色の行が今日の行です。入稿予定表と取り下げ予定表の、今日の行をまとめて実行します。</p>
-    <div id="plans"></div></div>
+    <div id="plans"></div>
+    <p class="status" id="engines"></p></div>
   <div class="card"><h2>取り下げ予定表</h2><div id="takedowns"></div></div>
 </section>
 <section id="takedown">
@@ -387,9 +407,12 @@ const T="__TOKEN__";const api=(p,o={})=>fetch(p+(p.includes("?")?"&":"?")+"t="+T
 const post=(p,b)=>api(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="compare")loadOutputs()});
+const ENG={python:"ツール",gas:"GAS"};
+function showEngines(e){engines.innerHTML=Object.entries(e||{}).map(([k,v])=>`${esc(k)}の原稿の作り方：<b>${ENG[v]||esc(v)}</b> <button class="btn" onclick="setEngine('${esc(k)}','${v==="python"?"gas":"python"}')">${v==="python"?"GAS で作るように戻す":"ツールで作るように切り替える"}</button>`).join("<br>")+'<br><span class="note">入寮はいまのところ GAS で作ります。</span>'}
+async function setEngine(target,engine){if(!confirm(`${target}の原稿を${ENG[engine]}で作るように切り替えます。よろしいですか？`))return;try{showEngines(await post("/api/engine",{target,engine}))}catch(e){alert(e.message)}}
 const opt=()=>({dry_run:p_dry.checked,headed:p_headed.checked,force:p_force.checked});
 async function load(){plans.innerHTML=takedowns.innerHTML='<div class="empty">読み込んでいます…</div>';
- try{const d=await api("/api/overview");today.textContent="今日："+d.today;
+ try{const d=await api("/api/overview");today.textContent="今日："+d.today;showEngines(d.engines);
   t_company.innerHTML=d.companies.map(c=>`<option>${esc(c)}</option>`).join("");
   plans.innerHTML=d.plans.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>職種</th><th>夜勤</th><th>通勤/入寮</th><th>ステータス</th><th>原稿数</th><th>職種名選択</th><th>実行結果</th><th></th></tr>`+d.plans.map(p=>`<tr class="${p.today?"today":""}"><td>${p.row}</td><td>${esc(p.date)}</td><td>${esc(p.company)}</td><td>${esc(p.category)}</td><td>${p.night}</td><td>${esc(p.commute)}</td><td>${esc(p.status)}</td><td>${p.count}</td><td>${esc(p.title)}</td><td>${esc(p.result)}</td><td><button class="btn" onclick="runRow(${p.row},'${esc(p.status)}',${p.count})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
   takedowns.innerHTML=d.takedowns.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>作成日から</th><th>作成日まで</th><th>メモ</th><th>ステータス</th><th>実行結果</th><th></th></tr>`+d.takedowns.map(r=>`<tr class="${r.today?"today":""}"><td>${r.row}</td><td>${esc(r.date)}</td><td>${esc(r.company)}</td><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td>${esc(r.memo)}</td><td>${esc(r.status)}</td><td>${esc(r.result)}</td><td><button class="btn danger" onclick="runTdRow(${r.row})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';

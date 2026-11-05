@@ -218,11 +218,8 @@ GAS で作る人とルールを共有できます。実行設定シートは使�
 python -m qmate_agent compare --gas-sheet 出力_G予定3_1454_AspiRove株式会社_7軽め_20261104
 ```
 
-作りの違う列が0なら、`config/settings.local.json` に次を足すと、通勤はツールで生成するようになります。
-
-```json
-{"schedule_targets": {"通勤": {"engine": "python"}}}
-```
+通勤は比較で同じ作りになることを確かめたので、ツールで生成するのが標準です（settings.json の engine が python）。
+GAS に戻したいときは、操作画面の「入稿」タブの下にある「GAS で作るように戻す」を押します（settings.local.json に保存されます）。
 
 サービスアカウントを、通勤用の土台のスプレッドシートにも「編集者」で共有してください（使用履歴を書くため）。
 生成した原稿を本体に「出力_…」シートとしても残したいときは `write_output_sheet` を true にします（件数が多いと時間がかかります）。

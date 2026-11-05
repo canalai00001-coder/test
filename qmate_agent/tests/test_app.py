@@ -70,6 +70,24 @@ class TestArgs(unittest.TestCase):
                                 "--to", "2026-10-22", "--status", "公開"])
 
 
+class TestEngineSwitch(unittest.TestCase):
+    def test_switch_saves_to_local_and_keeps_other_values(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "settings.json").write_text(json.dumps({"schedule_targets": {
+                "通勤": {"engine": "python", "gas_webapp_url": ""}, "入寮": {"engine": "gas"}}}), encoding="utf-8")
+            (d / "settings.local.json").write_text(json.dumps({"schedule_targets": {
+                "通勤": {"gas_webapp_url": "https://example/exec"}}}), encoding="utf-8")
+            with mock.patch.object(config, "CONFIG_DIR", d):
+                a = app.App()
+                self.assertEqual(a.engines(), {"通勤": "python"})
+                self.assertEqual(a.set_engine({"target": "通勤", "engine": "gas"}), {"通勤": "gas"})
+                t = config.load("settings.json")["schedule_targets"]["通勤"]
+                self.assertEqual((t["engine"], t["gas_webapp_url"]), ("gas", "https://example/exec"))
+                with self.assertRaises(ValueError):
+                    a.set_engine({"target": "入寮", "engine": "python"})
+
+
 class TestServer(unittest.TestCase):
     def test_token_required_and_job_started(self):
         server = app.serve(open_browser=False)

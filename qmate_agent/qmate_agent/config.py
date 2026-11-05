@@ -27,3 +27,14 @@ def _merge(base: dict, over: dict) -> dict:
     for k, v in over.items():
         out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
     return out
+
+
+def save_local(name: str, change: dict) -> None:
+    """<名前>.local.json に change を重ねて保存する（ほかの値は残す）。画面の切り替えボタンから使う。"""
+    local = CONFIG_DIR / f"{Path(name).stem}.local.json"
+    data = {}
+    if local.exists():
+        with open(local, encoding="utf-8") as f:
+            data = json.load(f)
+    with open(local, "w", encoding="utf-8") as f:
+        json.dump(_merge(data, change), f, ensure_ascii=False, indent=2)
