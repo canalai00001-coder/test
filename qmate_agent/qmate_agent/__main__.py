@@ -451,32 +451,50 @@ def cmd_takedown(args) -> int:
 
 
 def cmd_compare(args) -> int:
-    """入稿予定表の1行を、ツールで生成して（入稿・使用履歴の記録はしない）、GAS で作った出力シートと見比べる。"""
-    from . import schedule as sc
-    from .compare import compare
+    """GAS で作った出力シートと、同じ予約内容でツールが作った原稿（入稿・使用履歴の記録はしない）を見比べる。
 
-    settings, rules = config.load("settings.json"), config.load("rules.json")
-    plans = sc.read_plan(_spreadsheet(settings).plan_table(), date.today())
-    p = next((x for x in plans if x.row == args.row), None)
-    if not p:
-        print(f"入稿予定表に {args.row}行目がありません")
-        return 1
-    c = sc.commute_of(p, settings.get("schedule_default_commute", "通勤"))
+    予約内容は、実行設定シートで「実行状況」にその出力シート名が書かれている行から読む。
+    """
+    from . import generator, schedule as sc
+    from .checks import Manuscript
+    from .compare import compare
+    from .qmate_headers import QMATE_HEADERS
+
+    settings = config.load("settings.json")
+    c = args.commute
     t = settings["schedule_targets"][c]
     if not t.get("base_spreadsheet_id"):
         print(f"{c}用は、まだツールでの生成に対応していません（settings.json の base_spreadsheet_id がありません）")
         return 1
-    gas = _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"])).manuscript(args.gas_sheet)
-    created = date.fromisoformat(args.created) if args.created else (p.run_date or date.today())
-    tool = _generate_locally(p, c, t, dict(settings, schedule_targets={**settings["schedule_targets"],
-                                                                         c: dict(t, write_output_sheet=False)}),
-                             rules, created, "比較", SimpleNamespace(status=None, count=len(gas.rows)),
-                             record_usage=False, ignore_cooldown=True)
+    main_book = _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"]))
+    table = main_book.config_table()
+    status_col = sc.status_column(c) - 1
+    found = next((r for r in table[sc.CONFIG_DATA_START_ROW - 1:]
+                  if len(r) > status_col and args.gas_sheet in str(r[status_col])), None)
+    if found is None:
+        print(f"実行設定に、実行状況が「→ {args.gas_sheet}」の行が見つかりません（この出力シートを作った予約が分かりません）")
+        return 1
+    v = dict(zip(sc.CONFIG_FIELDS[c], [found[i] if i < len(found) else "" for i in range(len(sc.CONFIG_FIELDS[c]))]))
+    v = {k: generator.text(x).strip() for k, x in v.items()} | {"作成日": found[1]}
+    gas = main_book.manuscript(args.gas_sheet)
+    created = sc.parse_date(v["作成日"], date.today()) or date.today()
+    req = generator.Request(
+        category=v["職種番号"], company=v["会社名"], count=len(gas.rows), commute=v["通勤か入寮か"] or c,
+        employment=v["雇用形態"], update_type=v["更新種別"], status=v["ステータス"], image_category=v["画像カテゴリー"],
+        salary_pattern=v["給与パターン"], night=v["夜勤の有無"], standby_keyword=v["スタンバイキーワード"],
+        title_measure=v.get("タイトル(施策)", ""), box_word=v["求人ボックスワード"], title_choice=v["職種名選択"],
+        created=created)
+    print(f"予約内容: {v['会社名']} / {v['職種番号']} / {v['夜勤の有無']} / 給与 {v['給与パターン'] or '指定なし'} / "
+          f"{v.get('タイトル(施策)', '')} / 求人ボックスワード {v['求人ボックスワード'] or '空欄'} / {len(gas.rows)}件")
+    print("ツールで同じ内容の原稿を作ります（入稿・使用履歴の記録はしません）")
+    result = generator.run(settings, t, req, record_usage=False, ignore_cooldown=True)
+    tool = Manuscript(f"比較_{args.gas_sheet}", [QMATE_HEADERS] + [[r[h] for h in QMATE_HEADERS] for r in result.rows])
     lines, diff = compare(gas, tool)
     out = config.OUTPUT_DIR / f"比較_{args.gas_sheet}"
     out.mkdir(parents=True, exist_ok=True)
     (out / "比較結果.txt").write_text("\n".join(lines), encoding="utf-8")
-    (out / f"{tool.name}.csv").write_bytes(to_csv_bytes(tool, **settings["csv"]))
+    (out / "ツールで作った原稿.csv").write_bytes(to_csv_bytes(tool, **settings["csv"]))
+    (out / "GASで作った原稿.csv").write_bytes(to_csv_bytes(gas, **settings["csv"]))
     print("\n".join(lines))
     print(f"\nGAS {len(gas.rows)}件 ／ ツール {len(tool.rows)}件。作りが違う列: {diff}列")
     print(f"結果: {out / '比較結果.txt'}")
@@ -517,9 +535,8 @@ def main(argv=None) -> int:
     s.set_defaults(func=cmd_schedule)
 
     cp = sub.add_parser("compare", help="GAS で作った出力シートと、ツールで作った原稿を見比べる")
-    cp.add_argument("--row", type=int, required=True, help="入稿予定表の行（この行の内容でツールが生成する）")
-    cp.add_argument("--gas-sheet", required=True, help="同じ内容で GAS が作った出力シートの名前")
-    cp.add_argument("--created", help="求人メモの作成日（YYYY-MM-DD。省略時は入稿予定表の実行日）")
+    cp.add_argument("--gas-sheet", required=True, help="GAS が作った出力シートの名前")
+    cp.add_argument("--commute", default="通勤", help="通勤 か 入寮（どちらのスプレッドシートの出力か）")
     cp.set_defaults(func=cmd_compare)
 
     t = sub.add_parser("takedown", help="今 Q-mate に載っている原稿を取り下げる（削除する）")

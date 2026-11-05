@@ -82,6 +82,13 @@ class Spreadsheet:
         ws.update([values], f"A{row}", value_input_option="USER_ENTERED")
         return row
 
+    def config_table(self) -> list[list]:
+        """実行設定シート（書式を当てない値。作成日はシリアル値）。"""
+        from gspread.utils import ValueRenderOption
+
+        return self.book.worksheet(self.settings["config_sheet"]).get_all_values(
+            value_render_option=ValueRenderOption.unformatted)
+
     def pending_config_rows(self, status_col: int) -> list[int]:
         """実行設定で、予約が入っているのに実行状況が空欄の行（GAS が次に生成する行）の行番号。"""
         from .schedule import CONFIG_DATA_START_ROW
