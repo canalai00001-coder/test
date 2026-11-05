@@ -54,6 +54,12 @@ def text(v) -> str:
     return str(v)
 
 
+def js_round(x: float) -> int:
+    """JavaScript の Math.round（.5 は切り上げ）。Python の round は .5 を偶数に寄せるので、給与の上限が1円ずれる。"""
+    import math
+    return math.floor(x + 0.5)
+
+
 def js_len(s: str) -> int:
     """JavaScript の文字数（UTF-16）。T列の50文字の判定を GAS と同じにする。"""
     return len(s.encode("utf-16-le")) // 2
@@ -257,8 +263,8 @@ def _read_role(bank: Bank, role: str, values, seen_locations: set) -> None:
                 if text(lower) == "":
                     continue
                 upper = _cell(row, start + 3)
-                items.append({"lower": str(round(float(lower))),
-                              "upper": "" if text(upper) == "" else str(round(float(upper))),
+                items.append({"lower": str(js_round(float(lower))),
+                              "upper": "" if text(upper) == "" else str(js_round(float(upper))),
                               "detail": text(_cell(row, start + 5))})
             if items:
                 bank.salary_patterns[block] = items
@@ -299,7 +305,7 @@ def _read_role(bank: Bank, role: str, values, seen_locations: set) -> None:
                 if not key or text(val) == "":
                     continue
                 if key in ("給与_下限", "給与_上限", "基本給|▲必須") and isinstance(val, (int, float)):
-                    val = round(val)
+                    val = js_round(val)
                 bank.fixed_template[key] = text(val)
     elif role == "job_titles":
         h = header_row_guess(values)
@@ -576,7 +582,7 @@ class Generator:
                 if offsets is not None:
                     lower = base * 10000 + offsets[offset_idx % len(offsets)]
                     offset_idx += 1
-                    upper = round(lower * 1.25)
+                    upper = js_round(lower * 1.25)
                     detail = (_fill(self.pick(bank.salary_detail_templates), [str(lower), str(upper)])
                               if bank.salary_detail_templates else f"月給{lower:,}円〜{upper:,}円")
                     salary = {"lower": str(lower), "upper": str(upper), "detail": detail}
@@ -687,7 +693,7 @@ class Generator:
         row["メモ"] = self.memo(req, cat, salary, image, loc, company, letter)
         for k in ("給与_下限", "給与_上限", "基本給|▲必須"):
             try:
-                row[k] = str(round(float(row[k]))) if row[k] != "" else ""
+                row[k] = str(js_round(float(row[k]))) if row[k] != "" else ""
             except ValueError:
                 pass
         return row

@@ -113,7 +113,7 @@ class TestGenerate(unittest.TestCase):
         self.assertEqual(len(set(lows)), 3)
         for x in r.rows:
             lo, hi = int(x["給与_下限"]), int(x["給与_上限"])
-            self.assertEqual(hi, round(lo * 1.25))
+            self.assertEqual(hi, g.js_round(lo * 1.25))
             self.assertEqual(x["基本給|▲必須"], x["給与_下限"])
             self.assertIn(f"{lo}円", x["詳細な給与情報"])
             self.assertRegex(x["職種名|必須"], r"^＜.+＞二交代・夜勤あり・挑戦するなら今$")
@@ -182,6 +182,11 @@ class TestGenerate(unittest.TestCase):
                               "1クルマ", {"x": 3, "y": 4}, NOW)
         self.assertEqual(rows[0][3:8], [3, 13, "2026-11-05 10:00", 3, 3])
         self.assertEqual(rows[1], ["AspiRove株式会社", "1クルマ", "y", 1, 4, "2026-11-05 10:00", 4, 4])
+
+    def test_js_round(self):
+        # 350002 × 1.25 = 437502.5。GAS（Math.round）は 437503
+        self.assertEqual(g.js_round(350002 * 1.25), 437503)
+        self.assertEqual(g.js_round(2.4), 2)
 
     def test_usage_serial_date(self):
         self.assertEqual(g.parse_usage_date(46331.5), datetime(2026, 11, 5, 12, 0))
