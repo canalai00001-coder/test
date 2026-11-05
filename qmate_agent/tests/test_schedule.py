@@ -139,12 +139,15 @@ class TestScheduleCommand(unittest.TestCase):
                         mock.patch.dict("os.environ", {"QMATE_GAS_TOKEN": "t", "QMATE_GAS_TOKEN_DORM": "d"})]
         load = config.load
 
+        self.auto_takedown = False
+
         def settings_with_urls(n):
             if n != "settings.json":
                 return load(n)
             s = load(n)
             for c, t in s["schedule_targets"].items():
                 t["gas_webapp_url"] = f"https://script.google.com/{c}/exec"
+            s["takedown"]["enabled"] = self.auto_takedown
             return s
         self.patches.append(mock.patch.object(cli.config, "load", settings_with_urls))
         for p in self.patches:
@@ -202,8 +205,16 @@ class TestScheduleCommand(unittest.TestCase):
         self.assertIn(dorm_id, books)
         self.assertEqual((c.call_args.args[0].spreadsheet_id, u.call_args.args[0].spreadsheet_id), (dorm_id, dorm_id))
 
+    def test_no_auto_takedown_by_default(self):
+        # 今の設定では、入稿予定表の行を入れただけでは取り下げない
+        self.assertFalse(config.load("settings.json")["takedown"]["enabled"])
+        book = FakeBook("✅完了 → 出力_X")
+        self.assertEqual(self.run_schedule(book)[0], 0)
+        self.takedown.assert_not_called()
+
     def test_takedown_once_per_company_before_upload(self):
-        # 3行目は入稿ステータス空欄（=公開）。入稿の前に1回だけ前回分を取り下げる
+        # 自動の取り下げを有効にした場合：3行目は入稿ステータス空欄（=公開）。入稿の前に1回だけ取り下げる
+        self.auto_takedown = True
         book = FakeBook("✅完了 → 出力_X")
         code, _, _, u, _ = self.run_schedule(book)
         self.assertEqual(code, 0)
@@ -212,11 +223,13 @@ class TestScheduleCommand(unittest.TestCase):
 
     def test_draft_rows_do_not_take_down(self):
         # 下書きだけの試運転では、本番の公開原稿を消さない
+        self.auto_takedown = True
         book = FakeBook("✅完了 → 出力_X")
         self.run_schedule(book, status="下書き")
         self.takedown.assert_not_called()
 
     def test_failed_takedown_blocks_upload(self):
+        self.auto_takedown = True
         book = FakeBook("✅完了 → 出力_X")
         code, _, _, u, _ = self.run_schedule(book, takedown=RuntimeError("テンプレート出力が失敗しました"))
         self.assertEqual(code, 2)
@@ -224,6 +237,7 @@ class TestScheduleCommand(unittest.TestCase):
         self.assertIn("取り下げに失敗", book.results[3])
 
     def test_no_takedown_option(self):
+        self.auto_takedown = True
         book = FakeBook("✅完了 → 出力_X")
         self.run_schedule(book, no_takedown=True)
         self.takedown.assert_not_called()
@@ -249,6 +263,7 @@ class TestScheduleCommand(unittest.TestCase):
 
     def test_takedown_row_replaces_auto_takedown(self):
         # 同じ会社の取り下げ予定表の行があれば、入稿前の自動の取り下げ（全件）はしない
+        self.auto_takedown = True
         tplan = [["実行日", "会社", "作成日から", "作成日まで"], ["2026/10/30", "AspiRove株式会社", "2026/10/22", "2026/10/22"]]
         book = FakeBook("✅完了 → 出力_X", takedown_plan=tplan)
         code, _, _, u, _ = self.run_schedule(book)

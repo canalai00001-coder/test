@@ -51,9 +51,9 @@
       }
     }
   },
-  "_takedown_説明": "前回入稿した原稿の取り下げ。テンプレート出力で export_status の原稿を取り出し、更新種別を update_type、ステータスを status にして、chunk_rows 件ずつ取り込む。schedule では、その会社の行に「公開」があるときだけ、新しい原稿を入稿する前に行う（下書きだけの試運転では行わない）。",
+  "_takedown_説明": "前回入稿した原稿の取り下げ。テンプレート出力で export_status の原稿を取り出し、更新種別を update_type、ステータスを status にして、chunk_rows 件ずつ取り込む。取り下げは「取り下げ予定表」の行で行う。enabled を true にすると、入稿予定表の「公開」の行の入稿前にも、その会社の公開原稿をすべて自動で取り下げる（今は使わない）。",
   "takedown": {
-    "enabled": true,
+    "enabled": false,
     "export_status": "公開",
     "update_type": "削除",
     "status": "終了",
