@@ -34,7 +34,9 @@ class TestAccounts(unittest.TestCase):
         self.kr = FakeKeyring()
         for p in (mock.patch.object(config, "CONFIG_DIR", Path(self.dir.name)),
                   mock.patch.dict(sys.modules, {"keyring": self.kr}),
-                  mock.patch.dict("os.environ", {}, clear=True)):
+                  mock.patch.dict("os.environ", {}, clear=True),
+                  mock.patch.object(accounts, "_sheet_book", side_effect=RuntimeError("鍵なし")),
+                  mock.patch.dict(accounts._sheet_cache, clear=True)):
             p.start()
             self.addCleanup(p.stop)
         self.addCleanup(self.dir.cleanup)
@@ -56,9 +58,9 @@ class TestAccounts(unittest.TestCase):
         self.assertEqual(self.kr.store, {})
 
     def test_unregistered_and_env_fallback(self):
-        with self.assertRaisesRegex(RuntimeError, "登録されていません"):
+        with self.assertRaisesRegex(RuntimeError, "見つかりません|登録されていません"):
             accounts.qmate_config(SETTINGS, "ArK株式会社")
-        with self.assertRaisesRegex(RuntimeError, "登録されていません"):
+        with self.assertRaisesRegex(RuntimeError, "見つかりません|登録されていません"):
             accounts.qmate_config(SETTINGS, "AspiRove株式会社")
         self.assertEqual(accounts.companies(SETTINGS), [])
         with mock.patch.dict("os.environ", {"QMATE_ID": "aspi", "QMATE_PASSWORD": "pw"}):
@@ -73,3 +75,50 @@ class TestAccounts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "パスワード"):
             accounts.save("A社", "id", "123", "")
         self.assertEqual(accounts.parse_co(" 27859 "), "27859")
+
+
+class FakeBook:
+    def __init__(self, values, perms):
+        self.values, self.perms = values, perms
+
+    def worksheet(self, name):
+        assert name == "Q-mateログイン情報"
+        return types.SimpleNamespace(get_all_values=lambda: self.values)
+
+    def list_permissions(self):
+        return self.perms
+
+
+SHEET_VALUES = [["会社名", "ログインID", "パスワード", "CSV取込画面のURL（またはco=の番号）", "メモ"],
+                ["ArK株式会社", "ark@example.com", "sheetpw", "https://m.q-mate.jp/job_offers/bulk_new?co=22222", ""],
+                ["", "", "", "", "空行"],
+                ["B社", "b@example.com", "", "333", ""]]
+
+
+class TestSheetAccounts(unittest.TestCase):
+    def use(self, perms):
+        book = FakeBook(SHEET_VALUES, perms)
+        for p in (mock.patch.object(accounts, "_sheet_book", return_value=book),
+                  mock.patch.dict(accounts._sheet_cache, clear=True),
+                  mock.patch.object(accounts, "load", return_value={}),
+                  mock.patch.dict("os.environ", {}, clear=True)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_private_sheet_is_used(self):
+        self.use([{"type": "user", "emailAddress": "a@example.com"}])
+        q = accounts.qmate_config(dict(SETTINGS, spreadsheet_id="x"), "ArK株式会社")
+        self.assertEqual((q["login_id"], q["password"], q["upload_url"]),
+                         ("ark@example.com", "sheetpw", "https://m.q-mate.jp/job_offers/bulk_new?co=22222"))
+        self.assertEqual(accounts.companies(dict(SETTINGS, spreadsheet_id="x")), ["ArK株式会社", "B社"])
+        self.assertIn("空欄", accounts.login_problem(dict(SETTINGS, spreadsheet_id="x"), "B社"))
+        listed = accounts.listing(dict(SETTINGS, spreadsheet_id="x"))
+        self.assertEqual([(a["company"], a["password"], a["source"]) for a in listed],
+                         [("ArK株式会社", True, "スプレッドシート"), ("B社", False, "スプレッドシート")])
+        self.assertNotIn("sheetpw", json.dumps(listed, ensure_ascii=False))
+
+    def test_link_shared_sheet_is_refused(self):
+        self.use([{"type": "anyone", "role": "writer"}])
+        with self.assertRaisesRegex(RuntimeError, "制限付き"):
+            accounts.qmate_config(dict(SETTINGS, spreadsheet_id="x"), "ArK株式会社")
+        self.assertIn("公開", accounts.listing(dict(SETTINGS, spreadsheet_id="x"))[0]["source"])

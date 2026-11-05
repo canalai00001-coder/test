@@ -138,7 +138,9 @@ class TestScheduleCommand(unittest.TestCase):
         self.patches = [mock.patch.object(config, "STATE_DIR", self.tmp / "state"),
                         mock.patch.dict("os.environ", {"QMATE_GAS_TOKEN": "t", "QMATE_GAS_TOKEN_DORM": "d",
                                                         "QMATE_ID": "id", "QMATE_PASSWORD": "pw"}),
-                        mock.patch("qmate_agent.accounts.load", lambda: self.registered)]
+                        mock.patch("qmate_agent.accounts.login_problem",
+                                   lambda st, c: "" if c in self.registered or c == "AspiRove株式会社"
+                                   else f"「{c}」の Q-mate のログイン情報が登録されていません")]
         self.registered = {}
         load = config.load
 

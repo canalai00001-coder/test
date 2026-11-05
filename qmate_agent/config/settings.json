@@ -14,6 +14,7 @@
   "_schedule_説明": "schedule コマンドの設定。入稿予定表の「通勤/入寮」の値で、通勤用・入寮用のどちらのスプレッドシート（GAS）で生成するかを切り替える。入稿予定表にない項目や空欄の項目は、それぞれの defaults の値で実行設定に予約する。",
   "plan_sheet": "入稿予定表",
   "takedown_sheet": "取り下げ予定表",
+  "accounts_sheet": "Q-mateログイン情報",
   "config_sheet": "実行設定",
   "generate_timeout_min": 30,
   "schedule_default_commute": "通勤",

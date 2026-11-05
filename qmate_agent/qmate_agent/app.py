@@ -111,6 +111,7 @@ class App:
     # ---- 会社（Q-mate のログイン情報） ----
     def accounts(self) -> list[dict]:
         from . import accounts
+        accounts._sheet_cache.clear()  # シートを書き換えたらすぐ画面に出す
         return accounts.listing(config.load("settings.json"))
 
     def save_account(self, body: dict) -> list[dict]:
@@ -432,7 +433,10 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
 </section>
 <section id="accounts">
   <div class="card"><h2>会社ごとの Q-mate のログイン情報</h2>
-    <p class="note">入稿予定表・取り下げ予定表の「会社」と同じ名前で登録してください。パスワードはファイルには書かず、このパソコンの Windows の資格情報マネージャーに保存します。</p>
+    <p class="note">いちばん先に、通勤用スプレッドシートの「Q-mateログイン情報」シートを見ます（会社名・ログインID・パスワード・CSV取込画面のURL）。
+      そのスプレッドシートが「リンクを知っている全員」に共有されているあいだは、シートのパスワードは使いません。</p>
+    <p class="note">シートに無い会社は、下の欄で登録できます（このパソコンだけで使います。パスワードは Windows の資格情報マネージャーに保存）。
+      会社名は入稿予定表・取り下げ予定表の「会社」と同じにしてください。</p>
     <div id="acc_list"></div>
     <div class="row">
       <label>会社名<input id="a_company" placeholder="例：AspiRove株式会社"></label>
@@ -460,7 +464,7 @@ const T="__TOKEN__";const api=(p,o={})=>fetch(p+(p.includes("?")?"&":"?")+"t="+T
 const post=(p,b)=>api(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="compare")loadOutputs();if(b.dataset.tab==="accounts")loadAccounts()});
-function showAccounts(l){acc_list.innerHTML=l.length?"<table><tr><th>会社</th><th>ログイン ID</th><th>co</th><th>パスワード</th><th>登録先</th><th></th></tr>"+l.map(a=>`<tr><td>${esc(a.company)}</td><td>${esc(a.login_id)}</td><td>${esc(a.co)}</td><td>${a.password?'<span class="ok">保存済み</span>':'<span class="ng">なし</span>'}</td><td>${esc(a.source)}</td><td><button class="btn" data-c="${esc(a.company)}" onclick="start('/api/login_test',{company:this.dataset.c})">ログインを確かめる</button> <button class="btn" data-c="${esc(a.company)}" data-l="${esc(a.login_id)}" data-co="${esc(a.co)}" onclick="editAccount(this.dataset)">変更</button>${a.source==="登録"?` <button class="btn danger" data-c="${esc(a.company)}" onclick="delAccount(this.dataset.c)">削除</button>`:""}</td></tr>`).join("")+"</table>":'<div class="empty">まだ登録されていません</div>'}
+function showAccounts(l){acc_list.innerHTML=l.length?"<table><tr><th>会社</th><th>ログイン ID</th><th>co</th><th>パスワード</th><th>登録先</th><th></th></tr>"+l.map(a=>`<tr><td>${esc(a.company)}</td><td>${esc(a.login_id)}</td><td>${esc(a.co)}</td><td>${a.password?'<span class="ok">保存済み</span>':'<span class="ng">なし</span>'}</td><td>${esc(a.source)}</td><td><button class="btn" data-c="${esc(a.company)}" onclick="start('/api/login_test',{company:this.dataset.c})">ログインを確かめる</button> ${a.source.startsWith("スプレッドシート")?"":`<button class="btn" data-c="${esc(a.company)}" data-l="${esc(a.login_id)}" data-co="${esc(a.co)}" onclick="editAccount(this.dataset)">変更</button>`}${a.source==="登録"?` <button class="btn danger" data-c="${esc(a.company)}" onclick="delAccount(this.dataset.c)">削除</button>`:""}</td></tr>`).join("")+"</table>":'<div class="empty">まだ登録されていません</div>'}
 async function loadAccounts(){acc_list.textContent="読み込んでいます…";try{showAccounts(await api("/api/accounts"))}catch(e){acc_list.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
 function editAccount(d){a_company.value=d.c;a_login.value=d.l;a_co.value=d.co;a_pw.value="";a_pw.focus()}
 async function delAccount(c){if(!confirm(`${c} のログイン情報を削除します。よろしいですか？`))return;try{showAccounts(await post("/api/accounts/delete",{company:c}))}catch(e){alert(e.message)}}

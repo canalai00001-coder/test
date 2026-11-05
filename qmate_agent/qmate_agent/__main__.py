@@ -222,9 +222,6 @@ def cmd_schedule(args) -> int:
         return 0
 
     from . import accounts
-    can_login = set(accounts.companies(settings))
-    no_login = lambda name: (f"「{name}」の Q-mate のログイン情報が登録されていません。"
-                             "操作画面の「会社」タブで登録してから実行してください")
     gas_targets = settings["schedule_targets"]
     commutes = {}
     from .takedown import describe
@@ -232,8 +229,9 @@ def cmd_schedule(args) -> int:
         print(f"取り下げ予定表 {r.row}行目: {r.company} / {describe(r.date_from, r.date_to)}"
               f"{f' / メモに「{r.memo}」を含む' if r.memo else ''} / 対象ステータス "
               f"{r.status or settings['takedown']['export_status']} → 取り下げ（{settings['takedown']['update_type']}）")
-        if r.company not in can_login:
-            print(no_login(r.company))
+        problem = accounts.login_problem(settings, r.company)
+        if problem:
+            print(problem)
             return 1
     if targets:
         print(f"入稿予定表から {len(targets)}件 を実行します")
@@ -248,8 +246,9 @@ def cmd_schedule(args) -> int:
         print(f"  {p.row}行目: {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / "
               f"{commutes[p.row]}（{'ツール' if t.get('engine') == 'python' else commutes[p.row] + '用の GAS'}で生成） / {p.employment or defaults.get('雇用形態')} / "
               f"{args.count or p.count}件 / ステータス {args.status or p.status or defaults.get('ステータス')}")
-        if p.company not in can_login and not args.dry_run:
-            print(no_login(p.company))
+        problem = "" if args.dry_run else accounts.login_problem(settings, p.company)
+        if problem:
+            print(problem)
             return 1
 
     runners = {}
