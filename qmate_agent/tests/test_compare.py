@@ -67,4 +67,4 @@ class TestCompareCommand(unittest.TestCase):
         self.assertEqual((r.category, r.count, r.salary_pattern, r.night, r.title_measure, r.box_word, r.status),
                          ("1クルマ", 2, "35万", "夜勤あり", "タイトル2(施策)", "遠方からの応募可能", "下書き"))
         self.assertEqual(str(r.created), "2026-11-02")
-        self.assertEqual(seen["kw"], {"record_usage": False, "ignore_cooldown": True})
+        self.assertEqual(seen["kw"], {"record_usage": False, "ignore_cooldown": True, "dorm": False})

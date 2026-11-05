@@ -194,3 +194,104 @@ class TestGenerate(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- 入寮用（入寮用の土台の作りに合わせて再現）
+def dorm_sheets():
+    template = [QMATE_HEADERS, [""] * len(QMATE_HEADERS)]
+    template[1][QMATE_HEADERS.index("性別制限|必須")] = "なし"
+    base = dict(base_sheets())
+    return [
+        ("会社×勤務地×職種名_使用履歴", lambda: (_ for _ in ()).throw(AssertionError("使用履歴は読まない"))),
+        ("職種名", base["職種名"]),
+        ("会社情報", base["会社情報"]),
+        ("③給与（時給）", lambda: [
+            ["給料", "給与（詳細）\n正社員", "給与（詳細）\r\n契約社員", "", "基本給_最低額", "月収下限", "", "基本給_最高額", "月収上限",
+             "給与（詳細）\n正社員"],
+            ["", "", "", "", "1280円～", "", "", "25％UP", "", "▼月給"],
+            ["1", "", "", "", 1280, "1280円", "-", 1600, "1600円", "基本給\n時給1280円‐　1600円"],
+            ["2", "", "", "", 1285, "1285円", "-", 1606.25, "1606円", ""]]),
+        ("原稿勤務地・NG勤務地", lambda: [["", "都道府県", "市区町村", "合体", "", "AspiRove"],
+                                       ["1", "愛知県", "岡崎市", "", "", "沖縄県"],
+                                       ["2", "沖縄県", "那覇市", "", "", ""],
+                                       ["3", "愛知県", "岡崎市", "", "", ""]]),
+        ("スタンバイタイトル", lambda: [["住まいと仕事を確保"], ["寝る場所を確保"]]),
+        ("入寮タイトル", lambda: [
+            ["", "キーワード①", "職種名", "", "夜勤あり/夜勤なし", "", "キーワード②", "", "指定キーワド", "↓数式"],
+            ["1", "「入寮」", "半導体の製造", "／", "二交代・夜勤あり", "／", "住み込み寮あり求人", "／", "webで完結", "式"],
+            ["2", "「手ぶらOK」", "", "／", "", "／", "手ぶら応募で新生活をまるごと応援", "／", "", "式"],
+            ["3", "「夜勤なし用」", "", "／", "二交代・夜勤なし", "／", "日勤だけ", "／", "", "式"],
+            ["", "", "", "", "", "", "", "", "", ""]]),
+        ("応募資格・勤務時間・休日・キャッチコピー・待遇", lambda: [
+            ["", "お仕事内容の上", "キャッチコピー", "応募資格・条件|必須", "選考フロー", "勤務時間|必須\n夜勤あり",
+             "勤務時間|必須\n夜勤あり　2時３時", "勤務時間|必須\n夜勤なし", "待遇・福利厚生\n(正社員)", "休日休暇"],
+            ["＜NG＞", "", "75文字まで", "4000文字までOK", "400文字までOK", "75文字までOK", "", "", "", ""],
+            ["", "上1", "キャッチ1", "資格1", "フロー1", "夜勤あり1", "2時3時1", "夜勤なし1", "待遇1", "休日1"]]),
+        ("画像", lambda: [["画像カテゴリー", "入寮"], ["職種", ""], ["", 64], ["", 84]]),
+        ("6重め", lambda: [["説明"], [], [], ["職種名", "アルファベット", "", "仕事内容"],
+                          ["半導体製造装置の組み立て", "E", "", "重め1", "重め2"]]),
+        ("6重め_工場系で重労働_ヒトマネ用", lambda: [["x"], ["工場に混ざる中身"]]),
+        ("テンプレート(固定列)", lambda: template),
+    ]
+
+
+def dorm_req(**kw):
+    v = dict(category="6重め", company="AspiRove株式会社", count=3, commute="入寮", employment="契約社員（人材紹介）",
+             image_category="入寮", night="夜勤あり", title_choice="6重め｜半導体製造装置の組み立て",
+             created=date(2026, 11, 4))
+    v.update(kw)
+    return g.Request(**v)
+
+
+class TestDorm(unittest.TestCase):
+    def setUp(self):
+        self.bank = g.load_bank(dorm_sheets(), {"重め"}, dorm=True)
+
+    def test_bank(self):
+        b = self.bank
+        self.assertEqual(b.hourly, [{"lower": 1280, "upper": 1600, "template": "基本給\n時給1280円‐　1600円"},
+                                    {"lower": 1285, "upper": 1606, "template": ""}])
+        self.assertEqual(b.standby_titles, ["住まいと仕事を確保", "寝る場所を確保"])
+        self.assertEqual([r["keyword1"] for r in b.nyuryo_titles], ["「入寮」", "「手ぶらOK」", "「夜勤なし用」"])
+        self.assertEqual(b.parts["お仕事内容の上"], ["上1"])
+        # 入寮用 GAS は勤務地の重複をまとめない
+        self.assertEqual(b.locations, [("愛知県", "岡崎市"), ("沖縄県", "那覇市"), ("愛知県", "岡崎市")])
+
+    def test_rows(self):
+        gen = g.Generator(self.bank, [], rng=random.Random(1), now=NOW)
+        rows = gen.generate(dorm_req()).rows
+        self.assertEqual(len(rows), 3)
+        r = rows[0]
+        self.assertEqual(r["職種名|必須"], "＜半導体製造装置の組み立て＞二交代・夜勤あり・住まいと仕事を確保")
+        self.assertIn(r["求人ボックス用職種名"], {
+            "「入寮」半導体製造装置の組み立て／二交代・夜勤あり／住み込み寮あり求人／webで完結",
+            "「入寮」半導体製造装置の組み立て／二交代・夜勤あり／手ぶら応募で新生活をまるごと応援／webで完結",
+            "「手ぶらOK」半導体製造装置の組み立て／二交代・夜勤あり／住み込み寮あり求人／webで完結",
+            "「手ぶらOK」半導体製造装置の組み立て／二交代・夜勤あり／手ぶら応募で新生活をまるごと応援／webで完結"})
+        self.assertTrue(r["仕事内容|必須"].startswith("上1\n\n重め"))
+        self.assertEqual(r["給与形態|必須"], "時給")
+        self.assertIn(r["給与_下限"], {"1280", "1285"})
+        if r["給与_下限"] == "1280":
+            self.assertRegex(r["詳細な給与情報"], r"^基本給\n時給1280円‐　1600円\n.+225,280円〜281,600円\(1日8時間×月22日勤務の場合\)$")
+        else:
+            self.assertRegex(r["詳細な給与情報"], r"^〈時給〉1285円〜1606円\n.+226,160円〜282,656円")
+        self.assertEqual(r["勤務時間|必須"], "夜勤あり1")
+        self.assertEqual(r["待遇・福利厚生"], "待遇1")
+        self.assertIn(r["求人ページ用画像1"], {"64", "84"})
+        self.assertNotIn("沖縄県", {x["勤務地：都道府県|必須"] for x in rows})
+        self.assertRegex(r["メモ"], r"^22-261104-2-2-6E-\d+-\d+-(64|84)-愛知県岡崎市-AspiRove株式会社/G$")
+
+    def test_night_variant_and_no_night(self):
+        gen = g.Generator(self.bank, [], rng=random.Random(2), now=NOW)
+        self.assertEqual(gen.generate(dorm_req(night="夜勤あり(2時3時)")).rows[0]["勤務時間|必須"], "2時3時1")
+        r = gen.generate(dorm_req(night="夜勤なし")).rows[0]
+        self.assertEqual(r["勤務時間|必須"], "夜勤なし1")
+        self.assertIn("二交代・夜勤なし", r["求人ボックス用職種名"])
+        self.assertNotIn("住み込み寮あり求人", r["求人ボックス用職種名"])  # 夜勤ありだけの行は使わない
+
+    def test_title_fixed_per_row_and_usage(self):
+        b = g.load_bank(dorm_sheets(), {"工場"}, dorm=True)
+        gen = g.Generator(b, [], rng=random.Random(3), now=NOW)
+        res = gen.generate(dorm_req(category="2工場", title_choice="", count=4))
+        self.assertEqual(len(res.title_counts), 1)
+        self.assertEqual(sum(res.title_counts.values()), 4)

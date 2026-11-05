@@ -5,7 +5,7 @@
   - 取り下げ：会社・作成日の期間・メモを指定して、Q-mate の原稿を取り下げる
   - 更新：GitHub に新しい版があるかを確かめ、ボタン1つで最新にする（ダウンロードした ZIP からも更新できる）
   - 比較：GAS で作った出力シートと、同じ予約内容でツールが作った原稿を見比べる（生成をツールに切り替える前の確認）
-  - 原稿の作り方：通勤の原稿を GAS で作るかツールで作るかを切り替える（settings.local.json に保存）
+  - 原稿の作り方：通勤・入寮それぞれ、原稿を GAS で作るかツールで作るかを切り替える（settings.local.json に保存）
   - 設定の確認：ログイン情報・合言葉・ウェブアプリの URL・サービスアカウントの鍵がそろっているか
 
 実行そのものは、これまでと同じコマンド（python -m qmate_agent schedule など）を裏で動かし、
@@ -94,15 +94,21 @@ class App:
         title = f"取り下げ（{body['company']}）" + ("：取り出しと分割だけ" if body.get("dry_run") else "")
         return title, args + self._common(body)
 
-    def outputs(self) -> list[str]:
+    def outputs(self) -> list[dict]:
+        """比較に使える GAS の出力シート（通勤用・入寮用）。"""
         from .sheet import Spreadsheet
 
         settings = config.load("settings.json")
-        t = settings["schedule_targets"]["通勤"]
-        return Spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"])).output_sheet_names()
+        out = []
+        for c in self.ENGINE_TARGETS:
+            t = settings["schedule_targets"].get(c)
+            if t and t.get("base_spreadsheet_id"):
+                book = Spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"]))
+                out += [{"commute": c, "sheet": n} for n in book.output_sheet_names()]
+        return out
 
     # ---- 原稿の作り方（GAS / ツール） ----
-    ENGINE_TARGETS = ("通勤",)  # ツールで作れるもの。入寮はまだ GAS だけ
+    ENGINE_TARGETS = ("通勤", "入寮")
 
     def engines(self) -> dict:
         targets = config.load("settings.json")["schedule_targets"]
@@ -300,7 +306,8 @@ def make_handler(app: App):
                 if u.path == "/api/takedown":
                     return self._send(200, app.run(*app.takedown_args(body)))
                 if u.path == "/api/compare":
-                    return self._send(200, app.run(f"比較：{body['sheet']}", ["compare", "--gas-sheet", body["sheet"]]))
+                    args = ["compare", "--gas-sheet", body["sheet"]] + (["--commute", body["commute"]] if body.get("commute") else [])
+                    return self._send(200, app.run(f"比較：{body['sheet']}", args))
                 if u.path == "/api/engine":
                     return self._send(200, app.set_engine(body))
                 if u.path == "/api/update/github":
@@ -386,7 +393,7 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
   </div>
 </section>
 <section id="compare">
-  <div class="card"><h2>GAS とツールで作った原稿の比較（通勤用）</h2>
+  <div class="card"><h2>GAS とツールで作った原稿の比較</h2>
     <p class="note">GAS で作った出力シートを選ぶと、同じ予約内容（実行設定の行から自動で探します）でツールが原稿を作り、列ごとに比べます。入稿も使用履歴の記録もしません。最後に「作りが違う列: 0列」と出れば同じ形です。</p>
     <div class="row"><button class="btn" onclick="loadOutputs()">出力シートを読み込む</button></div>
     <div id="outputs"></div></div>
@@ -408,7 +415,7 @@ const post=(p,b)=>api(p,{method:"POST",headers:{"Content-Type":"application/json
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="compare")loadOutputs()});
 const ENG={python:"ツール",gas:"GAS"};
-function showEngines(e){engines.innerHTML=Object.entries(e||{}).map(([k,v])=>`${esc(k)}の原稿の作り方：<b>${ENG[v]||esc(v)}</b> <button class="btn" onclick="setEngine('${esc(k)}','${v==="python"?"gas":"python"}')">${v==="python"?"GAS で作るように戻す":"ツールで作るように切り替える"}</button>`).join("<br>")+'<br><span class="note">入寮はいまのところ GAS で作ります。</span>'}
+function showEngines(e){engines.innerHTML=Object.entries(e||{}).map(([k,v])=>`${esc(k)}の原稿の作り方：<b>${ENG[v]||esc(v)}</b> <button class="btn" onclick="setEngine('${esc(k)}','${v==="python"?"gas":"python"}')">${v==="python"?"GAS で作るように戻す":"ツールで作るように切り替える"}</button>`).join("<br>")}
 async function setEngine(target,engine){if(!confirm(`${target}の原稿を${ENG[engine]}で作るように切り替えます。よろしいですか？`))return;try{showEngines(await post("/api/engine",{target,engine}))}catch(e){alert(e.message)}}
 const opt=()=>({dry_run:p_dry.checked,headed:p_headed.checked,force:p_force.checked});
 async function load(){plans.innerHTML=takedowns.innerHTML='<div class="empty">読み込んでいます…</div>';
@@ -430,7 +437,7 @@ async function poll(){clearTimeout(timer);try{const j=await api("/api/job?since=
  if(j.lines.length){log.textContent+=j.lines.join("\n")+"\n";log.scrollTop=log.scrollHeight}since=j.next??since;
  job_state.innerHTML=j.running?'<span class="warn">実行中…（この画面を閉じても止まりませんが、黒い画面は閉じないでください）</span>':(j.code===0?'<span class="ok">終わりました</span>':j.code==null?"":`<span class="ng">止まりました（コード ${j.code}）。記録を確認してください</span>`);
  if(j.running)timer=setTimeout(poll,1500);else if(j.title)load()}catch(e){timer=setTimeout(poll,3000)}}
-async function loadOutputs(){outputs.innerHTML="読み込んでいます…";try{const o=await api("/api/outputs");outputs.innerHTML=o.length?"<table>"+o.map(n=>`<tr><td>${esc(n)}</td><td><button class="btn" data-sheet="${esc(n)}" onclick="start('/api/compare',{sheet:this.dataset.sheet})">比べる</button></td></tr>`).join("")+"</table>":'<div class="empty">出力シートがありません</div>'}catch(e){outputs.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+async function loadOutputs(){outputs.innerHTML="読み込んでいます…";try{const o=await api("/api/outputs");outputs.innerHTML=o.length?"<table>"+o.map(n=>`<tr><td>${esc(n.commute)}</td><td>${esc(n.sheet)}</td><td><button class="btn" data-sheet="${esc(n.sheet)}" data-commute="${esc(n.commute)}" onclick="start('/api/compare',{sheet:this.dataset.sheet,commute:this.dataset.commute})">比べる</button></td></tr>`).join("")+"</table>":'<div class="empty">出力シートがありません</div>'}catch(e){outputs.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
 async function loadChecks(){checks.innerHTML="確認しています…";try{const c=await api("/api/checks");checks.innerHTML="<table>"+c.map(i=>`<tr><td>${i.ok?'<span class="ok">✔</span>':'<span class="ng">✖</span>'}</td><td>${esc(i.name)}</td><td class="note">${i.ok?"":esc(i.hint)}</td></tr>`).join("")+"</table>"}catch(e){checks.textContent=e.message}}
 async function checkUpdate(){ver.textContent="確認しています…";try{const u=await api("/api/update");const c=u.current.updated_at?`今の版：${esc(u.current.message||"")}（${esc(u.current.updated_at)} に更新）`:"今の版：このツールから更新したことがないため不明";ver.innerHTML=`${c}<br>最新の版：${esc(u.latest.message)}（${esc(u.latest.date)}）<br>`+(u.new?'<b class="warn">新しい版があります</b>':'<span class="ok">最新です</span>')}catch(e){ver.innerHTML=`<span class="ng">確認できませんでした：${esc(e.message)}</span>`}}
 function showUpdate(r){u_result.innerHTML=`<span class="ok">${r.changed}個のファイルを更新しました。</span>`+(r.pip_ok?"":`<br><span class="ng">部品の入れ直しでエラー：${esc(r.pip)}</span>`)+"<br><b>黒い画面と操作画面を閉じて、app.bat を開き直してください。</b>";checkUpdate()}

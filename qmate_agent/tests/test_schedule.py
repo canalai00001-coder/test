@@ -293,7 +293,7 @@ class TestScheduleCommand(unittest.TestCase):
         self.assertEqual(book.appended, [])
         gas.return_value.run.assert_not_called()
         self.assertEqual((seen["req"].category, seen["req"].count, seen["req"].salary_pattern), ("8梱包", 1000, "28万"))
-        self.assertEqual(seen["kw"], {"record_usage": True, "ignore_cooldown": False})
+        self.assertEqual(seen["kw"], {"record_usage": True, "ignore_cooldown": False, "dorm": False})
         ms = c.call_args.args[0].manuscript
         self.assertEqual(len(ms.rows), 2)
         self.assertIs(u.call_args.args[0].manuscript, ms)

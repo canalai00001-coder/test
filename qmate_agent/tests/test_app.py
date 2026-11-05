@@ -80,12 +80,12 @@ class TestEngineSwitch(unittest.TestCase):
                 "通勤": {"gas_webapp_url": "https://example/exec"}}}), encoding="utf-8")
             with mock.patch.object(config, "CONFIG_DIR", d):
                 a = app.App()
-                self.assertEqual(a.engines(), {"通勤": "python"})
-                self.assertEqual(a.set_engine({"target": "通勤", "engine": "gas"}), {"通勤": "gas"})
+                self.assertEqual(a.engines(), {"通勤": "python", "入寮": "gas"})
+                self.assertEqual(a.set_engine({"target": "通勤", "engine": "gas"}), {"通勤": "gas", "入寮": "gas"})
                 t = config.load("settings.json")["schedule_targets"]["通勤"]
                 self.assertEqual((t["engine"], t["gas_webapp_url"]), ("gas", "https://example/exec"))
                 with self.assertRaises(ValueError):
-                    a.set_engine({"target": "入寮", "engine": "python"})
+                    a.set_engine({"target": "寮", "engine": "python"})
 
 
 class TestServer(unittest.TestCase):

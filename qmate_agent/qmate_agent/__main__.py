@@ -240,7 +240,7 @@ def cmd_schedule(args) -> int:
         t = gas_targets[commutes[p.row]]
         defaults = t.get("defaults", {})
         print(f"  {p.row}行目: {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / "
-              f"{commutes[p.row]}（{commutes[p.row]}用の GAS で生成） / {p.employment or defaults.get('雇用形態')} / "
+              f"{commutes[p.row]}（{'ツール' if t.get('engine') == 'python' else commutes[p.row] + '用の GAS'}で生成） / {p.employment or defaults.get('雇用形態')} / "
               f"{args.count or p.count}件 / ステータス {args.status or p.status or defaults.get('ステータス')}")
         if company and p.company != company:
             print(f"入稿先に設定している会社（{company}）と違うため実行できません。settings.json の qmate を確認してください")
@@ -371,7 +371,8 @@ def _generate_locally(p, c, t, settings, rules, today, run_id, args, record_usag
         title_measure=v.get("タイトル(施策)", ""), box_word=v["求人ボックスワード"], title_choice=v["職種名選択"],
         created=today)
     print(f"ツールで原稿を生成します（{c}用の土台を使用）")
-    result = generator.run(settings, t, req, record_usage=record_usage, ignore_cooldown=ignore_cooldown)
+    result = generator.run(settings, t, req, record_usage=record_usage, ignore_cooldown=ignore_cooldown,
+                           dorm=c == "入寮")
     for w in result.warnings:
         print(w)
     name = f"出力_G予定{p.row}_{run_id}_{p.company}_{p.category}_{today:%Y%m%d}"
@@ -450,6 +451,14 @@ def cmd_takedown(args) -> int:
     return 0
 
 
+def _find_commute(settings: dict, sheet: str) -> str | None:
+    """出力シートがある方（通勤用・入寮用）を探す。"""
+    for c, t in settings["schedule_targets"].items():
+        if t.get("base_spreadsheet_id") and sheet in _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"])).output_sheet_names():
+            return c
+    return None
+
+
 def cmd_compare(args) -> int:
     """GAS で作った出力シートと、同じ予約内容でツールが作った原稿（入稿・使用履歴の記録はしない）を見比べる。
 
@@ -461,7 +470,10 @@ def cmd_compare(args) -> int:
     from .qmate_headers import QMATE_HEADERS
 
     settings = config.load("settings.json")
-    c = args.commute
+    c = args.commute or _find_commute(settings, args.gas_sheet)
+    if not c:
+        print(f"「{args.gas_sheet}」が、通勤用・入寮用どちらのスプレッドシートにも見つかりません")
+        return 1
     t = settings["schedule_targets"][c]
     if not t.get("base_spreadsheet_id"):
         print(f"{c}用は、まだツールでの生成に対応していません（settings.json の base_spreadsheet_id がありません）")
@@ -487,7 +499,7 @@ def cmd_compare(args) -> int:
     print(f"予約内容: {v['会社名']} / {v['職種番号']} / {v['夜勤の有無']} / 給与 {v['給与パターン'] or '指定なし'} / "
           f"{v.get('タイトル(施策)', '')} / 求人ボックスワード {v['求人ボックスワード'] or '空欄'} / {len(gas.rows)}件")
     print("ツールで同じ内容の原稿を作ります（入稿・使用履歴の記録はしません）")
-    result = generator.run(settings, t, req, record_usage=False, ignore_cooldown=True)
+    result = generator.run(settings, t, req, record_usage=False, ignore_cooldown=True, dorm=c == "入寮")
     tool = Manuscript(f"比較_{args.gas_sheet}", [QMATE_HEADERS] + [[r[h] for h in QMATE_HEADERS] for r in result.rows])
     lines, diff = compare(gas, tool)
     out = config.OUTPUT_DIR / f"比較_{args.gas_sheet}"
@@ -536,7 +548,7 @@ def main(argv=None) -> int:
 
     cp = sub.add_parser("compare", help="GAS で作った出力シートと、ツールで作った原稿を見比べる")
     cp.add_argument("--gas-sheet", required=True, help="GAS が作った出力シートの名前")
-    cp.add_argument("--commute", default="通勤", help="通勤 か 入寮（どちらのスプレッドシートの出力か）")
+    cp.add_argument("--commute", help="通勤 か 入寮（どちらのスプレッドシートの出力か。省略時は自動で探す）")
     cp.set_defaults(func=cmd_compare)
 
     t = sub.add_parser("takedown", help="今 Q-mate に載っている原稿を取り下げる（削除する）")
