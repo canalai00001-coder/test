@@ -233,6 +233,17 @@ class TestUploader(unittest.TestCase):
         with mock.patch.dict(os.environ, {"QMATE_ID": "a@example.com", "QMATE_PASSWORD": pw}):
             return QmateUploader(dict(self.cfg, **cfg), out_dir=tmp).upload(csv_path, "x")
 
+    def test_company_login_info_and_check_login(self):
+        from qmate_agent.uploader import QmateUploader
+        keep = {k: v for k, v in os.environ.items() if not k.startswith("QMATE_")}
+        with mock.patch.dict(os.environ, keep, clear=True):
+            # 環境変数がなくても、会社ごとに登録したログイン情報（cfg の login_id・password）で入れる
+            self.assertTrue(QmateUploader(dict(self.cfg, login_id="ark@example.com", password="pw")).check_login() is not None)
+            with self.assertRaisesRegex(RuntimeError, "ログインできませんでした"):
+                QmateUploader(dict(self.cfg, login_id="ark@example.com", password="ng")).check_login()
+            with self.assertRaisesRegex(RuntimeError, "会社」タブ"):
+                QmateUploader(dict(self.cfg)).check_login()
+
     def test_success(self):
         r = self.upload(table(clean_row()))
         self.assertTrue(r.ok, r)

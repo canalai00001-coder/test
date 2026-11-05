@@ -83,13 +83,28 @@ playwright install chromium
 export ANTHROPIC_API_KEY=...
 ```
 
-### 3. Q-mate のログイン情報
+### 3. Q-mate のログイン情報（会社ごと）
 
-ID とパスワードはファイルに書かず、環境変数で渡します。
+操作画面の「会社」タブで、会社ごとに登録します。
+
+- 会社名：入稿予定表・取り下げ予定表の「会社」と同じ名前
+- ログイン ID・パスワード
+- CSV取込画面の URL（`…/job_offers/bulk_new?co=12345`）か、co= の後ろの数字
+
+会社名・ID・co は `config/accounts.local.json` に書き、パスワードは Windows の資格情報マネージャーに保存します
+（ファイルには書きません。GitHub にも上がらず、更新しても消えません）。
+登録したら「ログインを確かめる」で、ログインして CSV取込画面を開けるかを確かめます（原稿は変えません）。
+コマンドなら `python -m qmate_agent login-test --company 会社名`。
+
+入稿・取り下げは、予定表の会社名で登録を探して、その会社のログイン情報と CSV取込画面を使います。
+登録していない会社の行は止めます（「入稿しない」で試すときは止めません）。
+原稿の生成には、土台の「会社情報」シートにもその会社の行が要ります。
+
+settings.json の qmate.company（AspiRove株式会社）だけは、登録しなくても、これまでどおり環境変数で動きます。
 
 ```bash
-export QMATE_ID=...
-export QMATE_PASSWORD=...
+setx QMATE_ID ...
+setx QMATE_PASSWORD ...
 ```
 
 ### 4. Q-mate の CSV 入稿画面の設定

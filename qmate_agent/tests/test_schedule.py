@@ -136,7 +136,10 @@ class TestScheduleCommand(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.patches = [mock.patch.object(config, "STATE_DIR", self.tmp / "state"),
-                        mock.patch.dict("os.environ", {"QMATE_GAS_TOKEN": "t", "QMATE_GAS_TOKEN_DORM": "d"})]
+                        mock.patch.dict("os.environ", {"QMATE_GAS_TOKEN": "t", "QMATE_GAS_TOKEN_DORM": "d",
+                                                        "QMATE_ID": "id", "QMATE_PASSWORD": "pw"}),
+                        mock.patch("qmate_agent.accounts.load", lambda: self.registered)]
+        self.registered = {}
         load = config.load
 
         self.auto_takedown = False
@@ -332,10 +335,17 @@ class TestScheduleCommand(unittest.TestCase):
         c.assert_not_called()
         self.assertIn("会社名が空です", book.results[3])
 
-    def test_other_company_is_refused(self):
+    def test_unregistered_company_is_refused(self):
         book = FakeBook("", plan=[HEAD, ["2026/10/30", "ArK株式会社", "8梱包", "FALSE", "通勤", "", "", "10"]])
         self.assertEqual(self.run_schedule(book)[0], 1)
         self.assertEqual(book.appended, [])
+
+    def test_registered_company_is_uploaded_with_its_name(self):
+        self.registered = {"ArK株式会社": {"login_id": "ark", "co": "1", "upload_url": "u"}}
+        book = FakeBook("✅完了 → 出力_X", plan=[HEAD, ["2026/10/30", "ArK株式会社", "8梱包", "FALSE", "通勤", "", "", "10"]])
+        code, _, _, u, _ = self.run_schedule(book)
+        self.assertEqual(code, 0)
+        self.assertEqual(u.call_args[0][0].company, "ArK株式会社")
 
     def test_gas_stopped_before_reaching_row(self):
         book = FakeBook("", plan=[HEAD, DORM])

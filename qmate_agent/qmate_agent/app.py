@@ -6,6 +6,7 @@
   - 更新：GitHub に新しい版があるかを確かめ、ボタン1つで最新にする（ダウンロードした ZIP からも更新できる）
   - 比較：GAS で作った出力シートと、同じ予約内容でツールが作った原稿を見比べる（生成をツールに切り替える前の確認）
   - 原稿の作り方：通勤・入寮それぞれ、原稿を GAS で作るかツールで作るかを切り替える（settings.local.json に保存）
+  - 会社：会社ごとの Q-mate のログイン情報を登録する（パスワードは Windows の資格情報マネージャーに保存）
   - 設定の確認：ログイン情報・合言葉・ウェブアプリの URL・サービスアカウントの鍵がそろっているか
 
 実行そのものは、これまでと同じコマンド（python -m qmate_agent schedule など）を裏で動かし、
@@ -29,7 +30,7 @@ from urllib.parse import parse_qs, urlparse
 from . import config
 
 # 更新しても残すもの（各自の設定・鍵・環境・実行記録）。ZIP の中にあっても上書きしない
-KEEP = ("config/settings.local.json", "service_account.json", ".venv/", "state/", "output/")
+KEEP = ("config/settings.local.json", "config/accounts.local.json", "service_account.json", ".venv/", "state/", "output/")
 
 
 class Job:
@@ -107,6 +108,21 @@ class App:
                 out += [{"commute": c, "sheet": n} for n in book.output_sheet_names()]
         return out
 
+    # ---- 会社（Q-mate のログイン情報） ----
+    def accounts(self) -> list[dict]:
+        from . import accounts
+        return accounts.listing(config.load("settings.json"))
+
+    def save_account(self, body: dict) -> list[dict]:
+        from . import accounts
+        accounts.save(body.get("company", ""), body.get("login_id", ""), body.get("co", ""), body.get("password", ""))
+        return self.accounts()
+
+    def delete_account(self, body: dict) -> list[dict]:
+        from . import accounts
+        accounts.delete(body.get("company", ""))
+        return self.accounts()
+
     # ---- 原稿の作り方（GAS / ツール） ----
     ENGINE_TARGETS = ("通勤", "入寮")
 
@@ -129,7 +145,7 @@ class App:
 
     # ---- 画面に出す情報 ----
     def overview(self) -> dict:
-        from . import schedule as sc
+        from . import accounts, schedule as sc
         from .sheet import Spreadsheet
 
         settings = config.load("settings.json")
@@ -148,7 +164,8 @@ class App:
             p["result"] = results["plan"].get(p["row"], "")
         for r in tds:
             r["result"] = results["takedown"].get(r["row"], "")
-        return {"today": fmt(today), "plans": plans, "takedowns": tds, "engines": self.engines(), "companies": [settings["qmate"].get("company")]}
+        return {"today": fmt(today), "plans": plans, "takedowns": tds, "engines": self.engines(),
+                "companies": accounts.companies(settings)}
 
     @staticmethod
     def _results(book, settings) -> dict:
@@ -167,9 +184,15 @@ class App:
         settings = config.load("settings.json")
         items = [("サービスアカウントの鍵（service_account.json）",
                   (config.ROOT / settings["service_account_file"]).exists(), "qmate_agent フォルダに置いてください"),
-                 ("Q-mate のログイン ID（QMATE_ID）", bool(os.environ.get("QMATE_ID")), "setx QMATE_ID ログインID"),
-                 ("Q-mate のパスワード（QMATE_PASSWORD）", bool(os.environ.get("QMATE_PASSWORD")), "setx QMATE_PASSWORD パスワード")]
+                 ]
+        from . import accounts
+        listed = accounts.listing(settings)
+        items.append(("Q-mate のログイン情報（会社タブ）", bool(listed), "「会社」タブで会社を登録してください"))
+        for a in listed:
+            items.append((f"{a['company']} のパスワード", a["password"], "「会社」タブで登録し直してください"))
         for c, t in settings["schedule_targets"].items():
+            if t.get("engine") == "python":
+                continue  # ツールで生成するので GAS の URL・合言葉は使わない
             items.append((f"{c}用 GAS のウェブアプリの URL", t.get("gas_webapp_url", "").startswith("https://"),
                           "config\\settings.local.json に書いてください"))
             items.append((f"{c}用の合言葉（{t['token_env']}）", bool(os.environ.get(t["token_env"])),
@@ -286,6 +309,8 @@ def make_handler(app: App):
                     return self._send(200, app.job.to_dict(since) if app.job else {"lines": [], "running": False})
                 if u.path == "/api/update":
                     return self._send(200, app.update_info())
+                if u.path == "/api/accounts":
+                    return self._send(200, app.accounts())
                 if u.path == "/api/outputs":
                     return self._send(200, app.outputs())
             except Exception as e:
@@ -308,6 +333,13 @@ def make_handler(app: App):
                 if u.path == "/api/compare":
                     args = ["compare", "--gas-sheet", body["sheet"]] + (["--commute", body["commute"]] if body.get("commute") else [])
                     return self._send(200, app.run(f"比較：{body['sheet']}", args))
+                if u.path == "/api/accounts":
+                    return self._send(200, app.save_account(body))
+                if u.path == "/api/accounts/delete":
+                    return self._send(200, app.delete_account(body))
+                if u.path == "/api/login_test":
+                    return self._send(200, app.run(f"ログインの確認：{body['company']}",
+                                                   ["login-test", "--company", body["company"]]))
                 if u.path == "/api/engine":
                     return self._send(200, app.set_engine(body))
                 if u.path == "/api/update/github":
@@ -364,7 +396,7 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
 .status{font-size:13px;margin-bottom:8px}.empty{color:var(--sub);padding:12px 0}
 </style></head><body>
 <header><h1>Q-mate 入稿ツール</h1><span id="today"></span></header>
-<nav><button data-tab="post" class="on">入稿</button><button data-tab="takedown">取り下げ</button><button data-tab="compare">比較</button><button data-tab="update">更新</button><button data-tab="check">設定の確認</button></nav>
+<nav><button data-tab="post" class="on">入稿</button><button data-tab="takedown">取り下げ</button><button data-tab="compare">比較</button><button data-tab="accounts">会社</button><button data-tab="update">更新</button><button data-tab="check">設定の確認</button></nav>
 <main>
 <section id="post" class="on">
   <div class="card"><h2>入稿予定表</h2>
@@ -398,6 +430,20 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
     <div class="row"><button class="btn" onclick="loadOutputs()">出力シートを読み込む</button></div>
     <div id="outputs"></div></div>
 </section>
+<section id="accounts">
+  <div class="card"><h2>会社ごとの Q-mate のログイン情報</h2>
+    <p class="note">入稿予定表・取り下げ予定表の「会社」と同じ名前で登録してください。パスワードはファイルには書かず、このパソコンの Windows の資格情報マネージャーに保存します。</p>
+    <div id="acc_list"></div>
+    <div class="row">
+      <label>会社名<input id="a_company" placeholder="例：AspiRove株式会社"></label>
+      <label>ログイン ID<input id="a_login" autocomplete="off"></label>
+      <label>パスワード（変えないときは空欄）<input id="a_pw" type="password" autocomplete="new-password"></label>
+      <label>CSV取込画面の URL か co= の番号<input id="a_co" placeholder="https://m.q-mate.jp/job_offers/bulk_new?co=12345"></label>
+    </div>
+    <div class="row"><button class="btn primary" id="a_save">登録する</button></div>
+    <p class="note">登録したら「ログインを確かめる」を押してください。Q-mate にログインして CSV取込画面を開けるかだけを確かめます（原稿は変えません）。</p>
+  </div>
+</section>
 <section id="update">
   <div class="card"><h2>ツールの更新</h2><div id="ver" class="status">確認しています…</div>
     <div class="row"><button class="btn primary" id="u_github">GitHub から最新にする</button><button class="btn" onclick="checkUpdate()">新しい版があるか確認</button></div>
@@ -413,7 +459,12 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
 const T="__TOKEN__";const api=(p,o={})=>fetch(p+(p.includes("?")?"&":"?")+"t="+T,o).then(async r=>{const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j});
 const post=(p,b)=>api(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="compare")loadOutputs()});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="compare")loadOutputs();if(b.dataset.tab==="accounts")loadAccounts()});
+function showAccounts(l){acc_list.innerHTML=l.length?"<table><tr><th>会社</th><th>ログイン ID</th><th>co</th><th>パスワード</th><th>登録先</th><th></th></tr>"+l.map(a=>`<tr><td>${esc(a.company)}</td><td>${esc(a.login_id)}</td><td>${esc(a.co)}</td><td>${a.password?'<span class="ok">保存済み</span>':'<span class="ng">なし</span>'}</td><td>${esc(a.source)}</td><td><button class="btn" data-c="${esc(a.company)}" onclick="start('/api/login_test',{company:this.dataset.c})">ログインを確かめる</button> <button class="btn" data-c="${esc(a.company)}" data-l="${esc(a.login_id)}" data-co="${esc(a.co)}" onclick="editAccount(this.dataset)">変更</button>${a.source==="登録"?` <button class="btn danger" data-c="${esc(a.company)}" onclick="delAccount(this.dataset.c)">削除</button>`:""}</td></tr>`).join("")+"</table>":'<div class="empty">まだ登録されていません</div>'}
+async function loadAccounts(){acc_list.textContent="読み込んでいます…";try{showAccounts(await api("/api/accounts"))}catch(e){acc_list.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+function editAccount(d){a_company.value=d.c;a_login.value=d.l;a_co.value=d.co;a_pw.value="";a_pw.focus()}
+async function delAccount(c){if(!confirm(`${c} のログイン情報を削除します。よろしいですか？`))return;try{showAccounts(await post("/api/accounts/delete",{company:c}))}catch(e){alert(e.message)}}
+a_save.onclick=async()=>{try{showAccounts(await post("/api/accounts",{company:a_company.value,login_id:a_login.value,password:a_pw.value,co:a_co.value}));a_pw.value="";alert("登録しました。「ログインを確かめる」で確認してください")}catch(e){alert(e.message)}};
 const ENG={python:"ツール",gas:"GAS"};
 function showEngines(e){engines.innerHTML=Object.entries(e||{}).map(([k,v])=>`${esc(k)}の原稿の作り方：<b>${ENG[v]||esc(v)}</b> <button class="btn" onclick="setEngine('${esc(k)}','${v==="python"?"gas":"python"}')">${v==="python"?"GAS で作るように戻す":"ツールで作るように切り替える"}</button>`).join("<br>")}
 async function setEngine(target,engine){if(!confirm(`${target}の原稿を${ENG[engine]}で作るように切り替えます。よろしいですか？`))return;try{showEngines(await post("/api/engine",{target,engine}))}catch(e){alert(e.message)}}

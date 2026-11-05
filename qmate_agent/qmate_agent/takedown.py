@@ -102,11 +102,10 @@ def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_
     memo：メモにこの文字を含む原稿だけ（Q-mate のメモ欄にも入れて絞る）。
     """
     from .uploader import QmateUploader
+    from .accounts import qmate_config
 
     td = settings["takedown"]
-    q = settings["qmate"]
-    if q.get("company") and company != q["company"]:
-        raise RuntimeError(f"取り下げできるのは {q['company']} だけです（Q-mate のログイン先がこの会社のため）")
+    q = qmate_config(settings, company)  # その会社のログイン情報と CSV取込画面
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
     label = f"取り下げ_{company}_{stamp}"
     out_dir = out_root / label

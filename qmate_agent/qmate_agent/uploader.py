@@ -44,9 +44,11 @@ class QmateUploader:
         self.out_dir = out_dir
 
     def _login(self, page: Page) -> None:
-        user, pw = os.environ.get("QMATE_ID"), os.environ.get("QMATE_PASSWORD")
+        # 会社ごとに登録したログイン情報（accounts.qmate_config が入れる）。無ければ環境変数
+        user = self.cfg.get("login_id") or os.environ.get("QMATE_ID")
+        pw = self.cfg.get("password") or os.environ.get("QMATE_PASSWORD")
         if not (user and pw):
-            raise RuntimeError("環境変数 QMATE_ID / QMATE_PASSWORD を設定してください")
+            raise RuntimeError("Q-mate のログイン情報がありません。操作画面の「会社」タブで登録してください")
         page.goto(self.cfg["login_url"])
         _first(page, self.cfg["id_selectors"]).fill(user)
         _first(page, self.cfg["password_selectors"]).fill(pw)
@@ -120,6 +122,21 @@ class QmateUploader:
             finally:
                 browser.close()
         return out_path
+
+    def check_login(self) -> str:
+        """ログインして CSV取込画面を開けるか確かめる。開けた画面のタイトル（会社名など）を返す。"""
+        with sync_playwright() as p:
+            browser = launch(p, self.headless)
+            page = browser.new_page()
+            page.set_default_timeout(self.cfg.get("timeout_ms", 60000))
+            try:
+                self._login(page)
+                page.goto(self.cfg["upload_url"])
+                if "user_sessions" in page.url or not page.locator(self.cfg["upload_button_selector"]).count():
+                    raise RuntimeError("ログインはできましたが、CSV取込画面を開けませんでした。会社番号（co=）を確認してください")
+                return page.title()
+            finally:
+                browser.close()
 
     def upload(self, csv_path: Path, label: str) -> UploadResult:
         self.out_dir.mkdir(parents=True, exist_ok=True)

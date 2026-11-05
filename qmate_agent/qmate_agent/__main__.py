@@ -172,8 +172,11 @@ def cmd_upload(args) -> int:
         print("中止しました")
         return 1
 
+    from .accounts import qmate_config
     from .uploader import QmateUploader
-    result = QmateUploader(settings["qmate"], headless=not args.headed,
+    company = getattr(args, "company", None) or settings["qmate"].get("company")
+    print(f"入稿先: {company}")
+    result = QmateUploader(qmate_config(settings, company), headless=not args.headed,
                            out_dir=config.OUTPUT_DIR / ms.name).upload(csv_path, ms.name)
     print(("成功: " if result.ok else "失敗: ") + result.message)
     print(f"結果画面: {result.screenshot}")
@@ -218,7 +221,10 @@ def cmd_schedule(args) -> int:
         print(f"入稿予定表・取り下げ予定表に、{today:%Y/%m/%d} に実行する行がありません")
         return 0
 
-    company = settings["qmate"].get("company")
+    from . import accounts
+    can_login = set(accounts.companies(settings))
+    no_login = lambda name: (f"「{name}」の Q-mate のログイン情報が登録されていません。"
+                             "操作画面の「会社」タブで登録してから実行してください")
     gas_targets = settings["schedule_targets"]
     commutes = {}
     from .takedown import describe
@@ -226,8 +232,8 @@ def cmd_schedule(args) -> int:
         print(f"取り下げ予定表 {r.row}行目: {r.company} / {describe(r.date_from, r.date_to)}"
               f"{f' / メモに「{r.memo}」を含む' if r.memo else ''} / 対象ステータス "
               f"{r.status or settings['takedown']['export_status']} → 取り下げ（{settings['takedown']['update_type']}）")
-        if company and r.company != company:
-            print(f"入稿先に設定している会社（{company}）と違うため実行できません。settings.json の qmate を確認してください")
+        if r.company not in can_login:
+            print(no_login(r.company))
             return 1
     if targets:
         print(f"入稿予定表から {len(targets)}件 を実行します")
@@ -242,8 +248,8 @@ def cmd_schedule(args) -> int:
         print(f"  {p.row}行目: {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / "
               f"{commutes[p.row]}（{'ツール' if t.get('engine') == 'python' else commutes[p.row] + '用の GAS'}で生成） / {p.employment or defaults.get('雇用形態')} / "
               f"{args.count or p.count}件 / ステータス {args.status or p.status or defaults.get('ステータス')}")
-        if company and p.company != company:
-            print(f"入稿先に設定している会社（{company}）と違うため実行できません。settings.json の qmate を確認してください")
+        if p.company not in can_login and not args.dry_run:
+            print(no_login(p.company))
             return 1
 
     runners = {}
@@ -341,7 +347,7 @@ def cmd_schedule(args) -> int:
                 if isinstance(takedown_done.get(p.company), Exception):
                     raise RuntimeError(f"前回分の取り下げに失敗したため、入稿しません: {takedown_done[p.company]}")
                 print(f"\n--- 入稿: {name} ---")
-                if cmd_upload(SimpleNamespace(sheet=name, dry_run=args.dry_run, headed=args.headed, yes=True,
+                if cmd_upload(SimpleNamespace(sheet=name, dry_run=args.dry_run, headed=args.headed, yes=True, company=p.company,
                                               spreadsheet_id=t["spreadsheet_id"])) != 0:
                     raise RuntimeError(f"{name} の入稿に失敗しました")
             result = f"{'CSV作成まで' if args.dry_run else '入稿済み'}（{datetime.now():%m/%d %H:%M}）{', '.join(sheets)}"
@@ -394,7 +400,7 @@ def _check_and_upload(manuscripts, p, t, settings, args, takedown_companies, tak
         if isinstance(takedown_done.get(p.company), Exception):
             raise RuntimeError(f"前回分の取り下げに失敗したため、入稿しません: {takedown_done[p.company]}")
         print(f"\n--- 入稿: {ms.name} ---")
-        if cmd_upload(SimpleNamespace(sheet=ms.name, dry_run=args.dry_run, headed=args.headed, yes=True,
+        if cmd_upload(SimpleNamespace(sheet=ms.name, dry_run=args.dry_run, headed=args.headed, yes=True, company=p.company,
                                       spreadsheet_id=t["spreadsheet_id"], manuscript=ms)) != 0:
             raise RuntimeError(f"{ms.name} の入稿に失敗しました")
 
@@ -513,6 +519,23 @@ def cmd_compare(args) -> int:
     return 0 if diff == 0 else 2
 
 
+def cmd_login_test(args) -> int:
+    """登録した会社のログイン情報で、Q-mate にログインして CSV取込画面を開けるか確かめる（何も変えない）。"""
+    from .accounts import qmate_config
+    from .uploader import QmateUploader
+
+    settings = config.load("settings.json")
+    try:
+        cfg = qmate_config(settings, args.company)
+        print(f"{args.company} のログイン情報で Q-mate にログインします（{cfg['upload_url']}）")
+        title = QmateUploader(cfg, headless=not args.headed).check_login()
+    except Exception as e:
+        print(f"失敗: {e}")
+        return 2
+    print(f"成功: CSV取込画面を開けました（画面のタイトル: {title}）")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="qmate_agent")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -531,6 +554,7 @@ def main(argv=None) -> int:
     u.add_argument("--dry-run", action="store_true", help="入稿前の確認と CSV 作成まで")
     u.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
     u.add_argument("--yes", action="store_true", help="実行前の確認を省く")
+    u.add_argument("--company", help="入稿先の会社（省略時は settings.json の qmate.company）")
     u.set_defaults(func=cmd_upload)
 
     s = sub.add_parser("schedule", help="入稿予定表の行を生成からチェック、入稿まで行う")
@@ -550,6 +574,11 @@ def main(argv=None) -> int:
     cp.add_argument("--gas-sheet", required=True, help="GAS が作った出力シートの名前")
     cp.add_argument("--commute", help="通勤 か 入寮（どちらのスプレッドシートの出力か。省略時は自動で探す）")
     cp.set_defaults(func=cmd_compare)
+
+    lt = sub.add_parser("login-test", help="会社のログイン情報で Q-mate にログインできるか確かめる")
+    lt.add_argument("--company", required=True, help="会社名")
+    lt.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
+    lt.set_defaults(func=cmd_login_test)
 
     t = sub.add_parser("takedown", help="今 Q-mate に載っている原稿を取り下げる（削除する）")
     t.add_argument("--company", required=True, help="会社名")
