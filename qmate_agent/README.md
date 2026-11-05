@@ -203,6 +203,20 @@ python -m qmate_agent takedown --company AspiRove株式会社 --from 2026-10-01 
 
 設定は `settings.json` の `takedown`（取り出すステータス、更新種別、ステータス、1ファイルの件数）です。
 
+### 7. 操作画面（app.bat）
+
+`qmate_agent` フォルダの `app.bat` をダブルクリックすると、パソコンの中だけで動く操作画面がブラウザで開きます
+（黒い画面は閉じずにそのままにしておきます）。
+
+- **入稿**：入稿予定表と取り下げ予定表を表で見て、「今日の行をすべて実行」か、行ごとの「この行を実行」で動かす。
+  「入稿しない（生成・チェック・CSV 作成まで）」「入稿のブラウザを表示する」も選べる
+- **取り下げ**：会社・作成日の期間・メモ・ステータスを入れて取り下げる。「取り出しと件数の確認だけ」なら Q-mate は変えない
+- **更新**：GitHub に新しい版があるかを確かめ、「GitHub から最新にする」で更新する。
+  ダウンロードした ZIP を選んで更新することもできる。`settings.local.json`・`service_account.json`・`.venv`・`state`・`output` は上書きしない
+- **設定の確認**：ログイン ID・パスワード・合言葉・ウェブアプリの URL・鍵がそろっているか
+
+実行中の様子は画面下の「実行の記録」に出ます。削除を伴う操作は、実行前に確認のメッセージが出ます。
+
 ## 使い方
 
 ```bash
@@ -266,6 +280,7 @@ python -m unittest discover -s tests -t .
 | `qmate_agent/csv_export.py` | 出力シート → CSV |
 | `qmate_agent/uploader.py` | Q-mate へのログインと CSV 入稿 |
 | `qmate_agent/sheet.py` | スプレッドシートの読み書き |
+| `qmate_agent/app.py` | 操作画面（入稿・取り下げ・更新・設定の確認） |
 | `qmate_agent/takedown.py` | 前回分の取り下げ（テンプレート出力 → 削除・終了に書き換え → 10,000件ずつ取り込み） |
 | `qmate_agent/schedule.py` | 入稿予定表 → 実行設定への予約 → GAS での生成待ち |
 | `gas/qmate_agent_api.gs` | ツールから GAS の生成を呼び出すための入口（Apps Script に追加する） |

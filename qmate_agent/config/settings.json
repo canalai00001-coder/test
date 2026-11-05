@@ -60,6 +60,8 @@
     "chunk_rows": 10000,
     "result_poll_times": 360
   },
+  "_update_説明": "操作画面の「更新」で最新の版を取り込む GitHub のリポジトリとブランチ。subdir の中身だけを上書きする。",
+  "update": {"repo": "canalai00001-coder/test", "branch": "claude/relaxed-clarke-nk8kc9", "subdir": "qmate_agent"},
   "qmate": {
     "login_url": "https://m.q-mate.jp/user_sessions/new?layout=login",
     "id_selectors": ["#login_id", "input[type='email']", "input[name*='email']", "input[name*='login']"],
