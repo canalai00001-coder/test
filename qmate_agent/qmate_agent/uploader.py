@@ -80,18 +80,26 @@ class QmateUploader:
 
     @staticmethod
     def _find_co(page: Page) -> str:
-        m = re.search(r"[?&]co=(\d+)", page.url)
-        if m:
-            return m.group(1)
-        cos = set()
-        for href in page.eval_on_selector_all("a[href*='co=']", "els => els.map(e => e.getAttribute('href'))"):
-            m = re.search(r"[?&]co=(\d+)", href or "")
-            if m:
-                cos.add(m.group(1))
-        if len(cos) > 1:
-            raise RuntimeError(f"このアカウントでは複数の会社（co={', '.join(sorted(cos))}）を扱えます。"
-                               "ログイン情報シートの URL 欄に、入稿する会社の CSV取込画面の URL を入れてください")
-        return cos.pop() if cos else ""
+        """ログイン直後の画面から、この会社の co（Q-mate の会社番号）を探す。
+
+        1. co= の付いたリンク  2. 企業情報管理などの /companies/番号 のリンク（co と同じ番号）
+        3. 求人情報一覧の画面にある CSV取込画面（bulk_new?co=）へのリンク
+        """
+        def hrefs():
+            return page.eval_on_selector_all("a[href]", "els => els.map(e => e.getAttribute('href') || '')")
+
+        def pick(pattern, urls):
+            cos = {m.group(1) for u in urls for m in [re.search(pattern, u)] if m}
+            if len(cos) > 1:
+                raise RuntimeError(f"このアカウントでは複数の会社（{', '.join(sorted(cos))}）を扱えます。"
+                                   "ログイン情報シートの URL 欄に、入稿する会社の CSV取込画面の URL を入れてください")
+            return cos.pop() if cos else ""
+
+        co = pick(r"[?&]co=(\d+)", [page.url] + hrefs()) or pick(r"/companies/(\d+)", hrefs())
+        if co:
+            return co
+        page.goto(re.sub(r"(https?://[^/]+).*", r"\1/job_offers", page.url))
+        return pick(r"[?&]co=(\d+)", [h for h in hrefs() if "bulk" in h or "co=" in h])
 
     def _result_text(self, page: Page) -> str:
         loc = page.locator(self.cfg.get("result_selector", "body"))

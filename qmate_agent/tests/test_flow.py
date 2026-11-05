@@ -118,7 +118,7 @@ class TestUploadGate(unittest.TestCase):
 PAGES = {
     "/user_sessions/new": "<form method=post action=/user_sessions><input type=email name=email>"
                           "<input type=password name=password><button type=submit>ログイン</button></form>",
-    "/home": "<p>ホーム</p><a href='/import?co=27859'>CSV取込</a>",
+    "/home": "<p>ホーム</p><a href='/job_offers'>求人情報一覧</a><a href='/companies/27859/edit'>企業情報管理</a>",
 }
 
 
