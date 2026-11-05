@@ -94,6 +94,44 @@ class Spreadsheet:
     def config_status(self, row: int, col: int) -> str:
         return (self.book.worksheet(self.settings["config_sheet"]).cell(row, col).value or "").strip()
 
+    def sources(self) -> list:
+        """原稿の生成用：[(シート名, 値を読む関数)]。中身は必要になったときだけ読む（書式を当てない値）。"""
+        from gspread.utils import ValueRenderOption
+
+        return [(ws.title, (lambda ws=ws: ws.get_all_values(value_render_option=ValueRenderOption.unformatted)))
+                for ws in self.book.worksheets()]
+
+    def usage_rows(self, sheet: str) -> list[list]:
+        """使用履歴（見出しを除く）。シートが無ければ空。"""
+        import gspread
+        from gspread.utils import ValueRenderOption
+
+        try:
+            values = self.book.worksheet(sheet).get_all_values(value_render_option=ValueRenderOption.unformatted)
+        except gspread.WorksheetNotFound:
+            return []
+        return values[1:]
+
+    def write_usage(self, sheet: str, rows: list[list]) -> None:
+        """使用履歴を書き戻す（GAS の flushUsageCache_ と同じく、2行目から全部書き直す。直近使用日は文字で）。"""
+        import gspread
+
+        try:
+            ws = self.book.worksheet(sheet)
+        except gspread.WorksheetNotFound:
+            ws = self.book.add_worksheet(sheet, rows=max(len(rows) + 10, 100), cols=8)
+            ws.update([["会社名(アカウント)", "職種番号(カテゴリ)", "職種名", "累計使用回数", "累計原稿数", "直近使用日",
+                        "直近生成件数", "直近勤務地件数"]], "A1")
+        clean = [[int(v) if isinstance(v, float) and v.is_integer() else v for v in r] for r in rows]
+        if clean:
+            ws.update(clean, "A2", value_input_option="RAW")
+
+    def write_output_sheet(self, name: str, table: list[list]) -> None:
+        """生成した原稿を「出力_…」シートとしても残す（GAS で作ったときと同じ見た目にしたいとき）。"""
+        ws = self.book.add_worksheet(name, rows=len(table) + 1, cols=len(table[0]))
+        for i in range(0, len(table), 2000):
+            ws.update(table[i:i + 2000], f"A{i + 1}", value_input_option="RAW")
+
     def write_results(self, rows: list[list[str]]) -> None:
         """AIチェック結果シートを作り直して書き込む。"""
         import gspread

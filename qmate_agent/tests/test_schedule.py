@@ -140,6 +140,7 @@ class TestScheduleCommand(unittest.TestCase):
         load = config.load
 
         self.auto_takedown = False
+        self.engine = "gas"
 
         def settings_with_urls(n):
             if n != "settings.json":
@@ -148,6 +149,7 @@ class TestScheduleCommand(unittest.TestCase):
             for c, t in s["schedule_targets"].items():
                 t["gas_webapp_url"] = f"https://script.google.com/{c}/exec"
             s["takedown"]["enabled"] = self.auto_takedown
+            s["schedule_targets"]["通勤"]["engine"] = self.engine
             return s
         self.patches.append(mock.patch.object(cli.config, "load", settings_with_urls))
         for p in self.patches:
@@ -271,6 +273,44 @@ class TestScheduleCommand(unittest.TestCase):
         self.takedown.assert_called_once()
         self.assertEqual(self.takedown.call_args.kwargs["date_from"], date(2026, 10, 22))
         u.assert_called_once()
+
+    def test_python_engine_generates_without_gas(self):
+        # 通勤をツールで生成：GAS も実行設定も使わず、生成した原稿をチェックして入稿する
+        from qmate_agent import generator
+        from qmate_agent.qmate_headers import QMATE_HEADERS
+        self.engine = "python"
+        row = {h: "" for h in QMATE_HEADERS}
+        row.update({"更新種別|必須": "登録", "職種名|必須": "＜x＞二交代・夜勤なし"})
+        seen = {}
+
+        def fake_run(settings, target, req, **kw):
+            seen["req"], seen["kw"] = req, kw
+            return generator.Result([row, dict(row)], {"x": 2}, [])
+        book = FakeBook("")
+        with mock.patch.object(generator, "run", fake_run):
+            code, gas, c, u, _ = self.run_schedule(book)
+        self.assertEqual(code, 0)
+        self.assertEqual(book.appended, [])
+        gas.return_value.run.assert_not_called()
+        self.assertEqual((seen["req"].category, seen["req"].count, seen["req"].salary_pattern), ("8梱包", 1000, "28万"))
+        self.assertEqual(seen["kw"], {"record_usage": True, "ignore_cooldown": False})
+        ms = c.call_args.args[0].manuscript
+        self.assertEqual(len(ms.rows), 2)
+        self.assertIs(u.call_args.args[0].manuscript, ms)
+        self.assertIn("入稿済み", book.results[3])
+
+    def test_python_engine_error_is_recorded(self):
+        from qmate_agent import generator
+        self.engine = "python"
+        book = FakeBook("")
+
+        def boom(*a, **k):
+            raise ValueError("重複警告: チョークの製造は使用履歴に存在しています。")
+        with mock.patch.object(generator, "run", boom):
+            code, _, c, u, _ = self.run_schedule(book)
+        self.assertEqual(code, 2)
+        u.assert_not_called()
+        self.assertIn("重複警告", book.results[3])
 
     def test_row_option_ignores_date(self):
         book = FakeBook("✅完了 → 出力_X")

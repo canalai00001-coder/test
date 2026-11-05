@@ -67,16 +67,21 @@ def cmd_list(args) -> int:
 
 def cmd_check(args) -> int:
     settings, rules = _settings(args), config.load("rules.json")
+    local = getattr(args, "manuscript", None)  # ツールで生成した原稿（シートを経由しない）
     if args.csv:
         from .sheet import manuscript_from_csv
         ms, verdicts, book = manuscript_from_csv(args.csv), {}, None
+    elif local is not None:
+        book = _spreadsheet(settings)
+        ms, verdicts = local, {}
     else:
         book = _spreadsheet(settings)
         ms, verdicts = book.manuscript(args.sheet), book.inspection_verdicts()
     for col in ms.fill_blanks(rules.get("blank_defaults", {})):
         print(f"{col} が空欄の原稿に「{rules['blank_defaults'][col]}」を入れました")
 
-    sheet_issues = [] if args.csv else inspection_issue(ms.name, verdicts, settings)
+    # GAS の検品は、GAS で作った出力シートだけが対象（ツールで生成した原稿は、このチェックで同じ項目を見る）
+    sheet_issues = [] if args.csv or local is not None else inspection_issue(ms.name, verdicts, settings)
     results = check_sheet(ms, rules, one_segment=getattr(args, "one_segment", False))
     summaries = [""] * len(ms.rows)
     if not args.no_ai:
@@ -129,7 +134,8 @@ def cmd_check(args) -> int:
 def cmd_upload(args) -> int:
     settings, rules = _settings(args), config.load("rules.json")
     book = _spreadsheet(settings)
-    ms = book.manuscript(args.sheet)
+    local = getattr(args, "manuscript", None)
+    ms = local if local is not None else book.manuscript(args.sheet)
     ms.fill_blanks(rules.get("blank_defaults", {}))
     rv = _state("reviews.json").get(ms.name)
     uploaded = _state("uploaded.json")
@@ -146,7 +152,7 @@ def cmd_upload(args) -> int:
     elif uploaded.get(ms.name, {}).get("hash") == rv["hash"]:
         stop = f"同じ内容を {uploaded[ms.name]['uploaded_at']} に入稿済みです"
     else:
-        insp = inspection_issue(ms.name, book.inspection_verdicts(), settings)
+        insp = [] if local is not None else inspection_issue(ms.name, book.inspection_verdicts(), settings)
         if any(i.severity == "error" for i in insp):
             stop = insp[0].message
     if stop:
@@ -243,6 +249,8 @@ def cmd_schedule(args) -> int:
     runners = {}
     for c in sorted(set(commutes.values())):
         t = gas_targets[c]
+        if t.get("engine") == "python":
+            continue  # ツールで生成するので GAS は使わない
         url, token = t.get("gas_webapp_url", "").strip(), os.environ.get(t["token_env"], "").strip()
         missing = []
         if not url.startswith("https://"):
@@ -298,6 +306,16 @@ def cmd_schedule(args) -> int:
         gen_book = _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"]))
         print(f"\n=== 入稿予定表 {p.row}行目（{c}） ===")
         try:
+            if t.get("engine") == "python":
+                manuscripts = [_generate_locally(p, c, t, settings, rules, today, run_id, args)]
+                sheets = [m.name for m in manuscripts]
+                _check_and_upload(manuscripts, p, t, settings, args, takedown_companies, takedown_done)
+                result = f"{'CSV作成まで' if args.dry_run else '入稿済み'}（{datetime.now():%m/%d %H:%M}）{', '.join(sheets)}"
+                if not args.dry_run:
+                    done[p.key] = {"sheets": sheets, "finished_at": datetime.now().isoformat(timespec="seconds")}
+                    _save_state("schedule.json", done)
+                book.write_plan_result(p.row, result)
+                continue
             values = sc.config_row(p, c, t, rules, today, run_id, args.status, args.count)
             # GAS は実行状況が空欄の行をすべて生成するので、ほかの未実行の予約行があると一緒に作られてしまう
             others = gen_book.pending_config_rows(sc.status_column(c))
@@ -337,6 +355,47 @@ def cmd_schedule(args) -> int:
         book.write_plan_result(p.row, result)
     print(f"\n完了: {len(targets) + len(td_targets) - failed}件 成功 / {failed}件 失敗")
     return 0 if not failed else 2
+
+
+def _generate_locally(p, c, t, settings, rules, today, run_id, args, record_usage=True, ignore_cooldown=False):
+    """GAS を使わず、ツールで予約1行分の原稿を作る。実行設定シートは使わない（入稿予定表の値から直接作る）。"""
+    from . import generator, schedule as sc
+    from .checks import Manuscript
+    from .qmate_headers import QMATE_HEADERS
+
+    v = dict(zip(sc.CONFIG_FIELDS[c], sc.config_row(p, c, t, rules, today, run_id, args.status, args.count)))
+    req = generator.Request(
+        category=v["職種番号"], company=v["会社名"], count=int(v["原稿数"]) if v["原稿数"] else None, commute=c,
+        employment=v["雇用形態"], update_type=v["更新種別"], status=v["ステータス"], image_category=v["画像カテゴリー"],
+        salary_pattern=v["給与パターン"], night=v["夜勤の有無"], standby_keyword=v["スタンバイキーワード"],
+        title_measure=v.get("タイトル(施策)", ""), box_word=v["求人ボックスワード"], title_choice=v["職種名選択"],
+        created=today)
+    print(f"ツールで原稿を生成します（{c}用の土台を使用）")
+    result = generator.run(settings, t, req, record_usage=record_usage, ignore_cooldown=ignore_cooldown)
+    for w in result.warnings:
+        print(w)
+    name = f"出力_G予定{p.row}_{run_id}_{p.company}_{p.category}_{today:%Y%m%d}"
+    table = [QMATE_HEADERS] + [[r[h] for h in QMATE_HEADERS] for r in result.rows]
+    print(f"生成しました: {name}（{len(result.rows)}件）")
+    if t.get("write_output_sheet"):
+        _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"])).write_output_sheet(name, table)
+    return Manuscript(name, table)
+
+
+def _check_and_upload(manuscripts, p, t, settings, args, takedown_companies, takedown_done) -> None:
+    for ms in manuscripts:
+        print(f"\n--- チェック: {ms.name} ---")
+        if cmd_check(SimpleNamespace(sheet=ms.name, csv=None, no_ai=not settings.get("require_ai_check"),
+                                     one_segment=True, spreadsheet_id=t["spreadsheet_id"], manuscript=ms)) == 2:
+            raise RuntimeError(f"{ms.name} のチェック結果が NG のため入稿しません。レポートを確認してください")
+        if p.company in takedown_companies and p.company not in takedown_done:
+            takedown_done[p.company] = _takedown(p.company, settings, args.headed, args.dry_run)
+        if isinstance(takedown_done.get(p.company), Exception):
+            raise RuntimeError(f"前回分の取り下げに失敗したため、入稿しません: {takedown_done[p.company]}")
+        print(f"\n--- 入稿: {ms.name} ---")
+        if cmd_upload(SimpleNamespace(sheet=ms.name, dry_run=args.dry_run, headed=args.headed, yes=True,
+                                      spreadsheet_id=t["spreadsheet_id"], manuscript=ms)) != 0:
+            raise RuntimeError(f"{ms.name} の入稿に失敗しました")
 
 
 def _takedown(company: str, settings: dict, headed: bool, dry_run: bool, **filters):
@@ -391,6 +450,39 @@ def cmd_takedown(args) -> int:
     return 0
 
 
+def cmd_compare(args) -> int:
+    """入稿予定表の1行を、ツールで生成して（入稿・使用履歴の記録はしない）、GAS で作った出力シートと見比べる。"""
+    from . import schedule as sc
+    from .compare import compare
+
+    settings, rules = config.load("settings.json"), config.load("rules.json")
+    plans = sc.read_plan(_spreadsheet(settings).plan_table(), date.today())
+    p = next((x for x in plans if x.row == args.row), None)
+    if not p:
+        print(f"入稿予定表に {args.row}行目がありません")
+        return 1
+    c = sc.commute_of(p, settings.get("schedule_default_commute", "通勤"))
+    t = settings["schedule_targets"][c]
+    if not t.get("base_spreadsheet_id"):
+        print(f"{c}用は、まだツールでの生成に対応していません（settings.json の base_spreadsheet_id がありません）")
+        return 1
+    gas = _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"])).manuscript(args.gas_sheet)
+    created = date.fromisoformat(args.created) if args.created else (p.run_date or date.today())
+    tool = _generate_locally(p, c, t, dict(settings, schedule_targets={**settings["schedule_targets"],
+                                                                         c: dict(t, write_output_sheet=False)}),
+                             rules, created, "比較", SimpleNamespace(status=None, count=len(gas.rows)),
+                             record_usage=False, ignore_cooldown=True)
+    lines, diff = compare(gas, tool)
+    out = config.OUTPUT_DIR / f"比較_{args.gas_sheet}"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "比較結果.txt").write_text("\n".join(lines), encoding="utf-8")
+    (out / f"{tool.name}.csv").write_bytes(to_csv_bytes(tool, **settings["csv"]))
+    print("\n".join(lines))
+    print(f"\nGAS {len(gas.rows)}件 ／ ツール {len(tool.rows)}件。作りが違う列: {diff}列")
+    print(f"結果: {out / '比較結果.txt'}")
+    return 0 if diff == 0 else 2
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="qmate_agent")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -423,6 +515,12 @@ def main(argv=None) -> int:
     s.add_argument("--no-takedown", action="store_true", help="入稿前の前回分の取り下げをしない")
     s.add_argument("--takedown-row", type=int, help="取り下げ予定表のこの行だけを、実行日に関係なく実行する")
     s.set_defaults(func=cmd_schedule)
+
+    cp = sub.add_parser("compare", help="GAS で作った出力シートと、ツールで作った原稿を見比べる")
+    cp.add_argument("--row", type=int, required=True, help="入稿予定表の行（この行の内容でツールが生成する）")
+    cp.add_argument("--gas-sheet", required=True, help="同じ内容で GAS が作った出力シートの名前")
+    cp.add_argument("--created", help="求人メモの作成日（YYYY-MM-DD。省略時は入稿予定表の実行日）")
+    cp.set_defaults(func=cmd_compare)
 
     t = sub.add_parser("takedown", help="今 Q-mate に載っている原稿を取り下げる（削除する）")
     t.add_argument("--company", required=True, help="会社名")

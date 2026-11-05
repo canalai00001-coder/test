@@ -203,6 +203,29 @@ python -m qmate_agent takedown --company AspiRove株式会社 --from 2026-10-01 
 
 設定は `settings.json` の `takedown`（取り出すステータス、更新種別、ステータス、1ファイルの件数）です。
 
+### 6.5 原稿の生成をツールで行う（GAS からの移行）
+
+通勤用は、GAS（ウェブアプリ）を使わず、ツールで原稿を生成できます（`qmate_agent/generator.py`。
+通勤用 GAS の buildContentBank_・generateBatch_・buildRow_ をそのまま移したもの）。
+土台のスプレッドシートを読み、30日ルールの使用履歴も土台の「アカウント×職種名_使用履歴」を読み書きするので、
+GAS で作る人とルールを共有できます。実行設定シートは使わず、入稿予定表の値から直接作ります。
+
+切り替えの前に、同じ内容で GAS とツールの両方で作って見比べます。
+
+```bash
+# 入稿予定表の3行目の内容でツールが生成し（入稿・使用履歴の記録はしない）、GAS で作った出力シートと列ごとに比べる
+python -m qmate_agent compare --row 3 --gas-sheet 出力_G予定3_1454_AspiRove株式会社_7軽め_20261104 --created 2026-11-04
+```
+
+作りの違う列が0なら、`config/settings.local.json` に次を足すと、通勤はツールで生成するようになります。
+
+```json
+{"schedule_targets": {"通勤": {"engine": "python"}}}
+```
+
+サービスアカウントを、通勤用の土台のスプレッドシートにも「編集者」で共有してください（使用履歴を書くため）。
+生成した原稿を本体に「出力_…」シートとしても残したいときは `write_output_sheet` を true にします（件数が多いと時間がかかります）。
+
 ### 7. 操作画面（app.bat）
 
 `qmate_agent` フォルダの `app.bat` をダブルクリックすると、パソコンの中だけで動く操作画面がブラウザで開きます
@@ -280,6 +303,8 @@ python -m unittest discover -s tests -t .
 | `qmate_agent/csv_export.py` | 出力シート → CSV |
 | `qmate_agent/uploader.py` | Q-mate へのログインと CSV 入稿 |
 | `qmate_agent/sheet.py` | スプレッドシートの読み書き |
+| `qmate_agent/generator.py` | 原稿の生成（通勤用 GAS から移した処理） |
+| `qmate_agent/compare.py` | GAS とツールで作った原稿の見比べ |
 | `qmate_agent/app.py` | 操作画面（入稿・取り下げ・更新・設定の確認） |
 | `qmate_agent/takedown.py` | 前回分の取り下げ（テンプレート出力 → 削除・終了に書き換え → 10,000件ずつ取り込み） |
 | `qmate_agent/schedule.py` | 入稿予定表 → 実行設定への予約 → GAS での生成待ち |

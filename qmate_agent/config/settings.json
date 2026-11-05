@@ -20,6 +20,10 @@
   "schedule_targets": {
     "通勤": {
       "spreadsheet_id": "1nPk9AG7wePhszTO4bcN8Rs_gFNJKjlj0YAFanz9ggK4",
+      "_engine_説明": "gas なら GAS（ウェブアプリ）で生成、python ならツールで生成する。python のときは base_spreadsheet_id の土台を読み、使用履歴もそこに書く。write_output_sheet を true にすると、生成した原稿を本体に「出力_…」シートとしても残す。",
+      "engine": "gas",
+      "base_spreadsheet_id": "1ZfuZBafA0G1WPhpm_-7VnEdTF4mbiZkX0U-EQ09w0zY",
+      "write_output_sheet": false,
       "gas_webapp_url": "（通勤用 GAS のウェブアプリの URL）",
       "token_env": "QMATE_GAS_TOKEN",
       "_salary_from_floor_説明": "true なら給与パターンを rules.json の月給の給与下限から決める（クルマの夜勤ありなら「35万」）",
