@@ -12,6 +12,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
+from .checks import is_sheet_error
 from .qmate_headers import QMATE_HEADERS
 
 CATEGORY_NAMES = ["クルマ", "工場", "軽作業", "電子部品", "半導体", "重め", "軽め", "梱包", "検査", "ピッキング",
@@ -100,6 +101,7 @@ class Bank:
     standby_titles: list = field(default_factory=list)   # 入寮用：スタンバイタイトルシートのA列（S列のキーワード）
     nyuryo_titles: list = field(default_factory=list)    # 入寮用：入寮タイトルシート（T列の部品）
     hourly: list = field(default_factory=list)           # 入寮用：給与（時給）シート [{'lower','upper','template'}]
+    error_cells: dict = field(default_factory=dict)      # {シート名: #REF! などのエラー値だったセルの数}（文例には使わない）
 
 
 def skip_sheet(name: str, dorm: bool = False) -> bool:
@@ -218,6 +220,11 @@ def load_bank(sheets, needed_categories=None, dorm: bool = False) -> Bank:
         values = get()
         if not values:
             continue
+        # IMPORTRANGE が読めないときの #REF! などは、文例として使わない（空欄として扱う）
+        bad = sum(1 for row in values for v in row if is_sheet_error(v))
+        if bad:
+            bank.error_cells[name] = bad
+            values = [["" if is_sheet_error(v) else v for v in row] for row in values]
         role = classify(name, values, dorm)
         if needed_categories is not None and role.startswith(("content:", "paired:")) \
                 and role.split(":")[1] not in needed_categories:
@@ -1022,6 +1029,9 @@ def run(settings: dict, target: dict, req: Request, *, record_usage: bool = True
     usage = base.usage_rows(USAGE_SHEET)
     gen = Generator(bank, usage, rng=rng)
     result = gen.generate(req, ignore_cooldown=ignore_cooldown)
+    for name, n in bank.error_cells.items():
+        result.warnings.append(f"⚠️土台の「{name}」シートに、読めていないセル（#REF! など）が{n}個あります。"
+                               "その文例は使っていません。IMPORTRANGE の参照先を確かめてください")
     if record_usage:
         base.write_usage(USAGE_SHEET, update_usage(usage, req.company, req.category, result.title_counts, gen.now))
     return result

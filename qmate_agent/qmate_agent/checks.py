@@ -119,6 +119,16 @@ class Manuscript:
 
 
 INSPECTION_NOT_BLANK = ("求人ボックス用職種名", "待遇・福利厚生", "キャッチコピー")
+# 必須ではないが、空欄のまま入稿してはいけない列
+MUST_NOT_BLANK = ("休日休暇",)
+
+# スプレッドシートのエラー値（IMPORTRANGE が読めないときの #REF! など）。原稿のどこかに入っていたら入稿しない
+SHEET_ERROR = re.compile(r"#(?:REF!|N/A|VALUE!|NAME\?|DIV/0!|NUM!|ERROR!|NULL!|SPILL!|CALC!)"
+                         r"|Cannot find range or sheet|imported range|^Loading\.\.\.$", re.M)
+
+
+def is_sheet_error(v) -> bool:
+    return isinstance(v, str) and bool(SHEET_ERROR.search(v))
 
 
 def check_row(row: dict, headers: list[str], rules: dict) -> list[Issue]:
@@ -133,6 +143,14 @@ def check_row(row: dict, headers: list[str], rules: dict) -> list[Issue]:
     for col in INSPECTION_NOT_BLANK:
         if col in row and not row[col].strip():
             add("error", col, "空欄です（GAS の検品でも問題になる項目です）")
+    for col in MUST_NOT_BLANK:
+        if col in row and not row[col].strip():
+            add("error", col, "空欄です")
+    # スプレッドシートのエラー値（#REF! など）
+    for col, v in row.items():
+        if is_sheet_error(v):
+            m = SHEET_ERROR.search(v)
+            add("error", col, f"スプレッドシートのエラー値が入っています（{m.group(0)}）。土台のシートが読めていません")
     wage_type = nfkc(row.get("給与形態"))
     if wage_type in NEEDS_LABOR_HOURS:
         for col in ("基本給", LABOR_HOURS_COL):
@@ -222,14 +240,20 @@ def check_row(row: dict, headers: list[str], rules: dict) -> list[Issue]:
     return issues
 
 
-def check_sheet(ms: Manuscript, rules: dict, one_segment: bool = False) -> list[list[Issue]]:
+def check_sheet(ms: Manuscript, rules: dict, one_segment: bool = False, company: dict | None = None) -> list[list[Issue]]:
     """行ごとの指摘のリストを返す（ms.rows と同じ順番）。
+
+    company: 入稿先の会社（{"name", "email", "memo_name", "others"}。土台の会社情報シートから読み直したもの）。
+    渡したときは、全行の応募時メール送信先1がこの会社のものか、メモの会社名がこの会社かを確かめる。
 
     one_segment: シート全体が1つの予約行から作られている（schedule で作ったシート）。
     GAS の検品は予約行（1-1、1-2…）ごとに勤務地の重複を問題にするので、
     1つの予約行だけのシートなら、シート内の勤務地の重複をエラーにする。
     """
     results = [check_row(r, ms.headers, rules) for r in ms.rows]
+    if company is not None:
+        for i, r in enumerate(ms.rows):
+            results[i] += check_company(r, company)
 
     def dupes(key):
         seen = {}
@@ -248,6 +272,30 @@ def check_sheet(ms: Manuscript, rules: dict, one_segment: bool = False) -> list[
             results[i].append(Issue("error" if one_segment else "warning", "勤務地：市区町村",
                                     f"勤務地「{place}」がシート内で重複しています"))
     return results
+
+
+def check_company(row: dict, company: dict) -> list[Issue]:
+    """応募時メール送信先1とメモの会社名が、入稿先の会社のものか。"""
+    issues = []
+    want = (company.get("email") or "").strip()
+    got = (row.get("応募時メール送信先1") or "").strip()
+    if not want:
+        issues.append(Issue("error", "応募時メール送信先1",
+                            f"会社情報シートに {company['name']} の応募時メール送信先1がありません。確かめられないため入稿しません"))
+    elif got.lower() != want.lower():
+        owner = next((n for n, e in (company.get("others") or {}).items() if e and e.lower() == got.lower()), "")
+        issues.append(Issue("error", "応募時メール送信先1",
+                            f"{company['name']} の応募先は {want} ですが、{got or '空欄'} になっています"
+                            + (f"（{owner} のメールアドレスです）" if owner else "")))
+    elif any(e and e.lower() == want.lower() for e in (company.get("others") or {}).values()):
+        same = [n for n, e in company["others"].items() if e and e.lower() == want.lower()]
+        issues.append(Issue("warning", "応募時メール送信先1",
+                            f"{want} は {'、'.join(same)} の応募先としても会社情報に登録されています"))
+    memo = parse_memo(row.get("メモ", ""))
+    want_memo = (company.get("memo_name") or "").split("/")[0].strip()
+    if memo and want_memo and memo.company != want_memo:
+        issues.append(Issue("error", "メモ", f"メモの会社名が「{memo.company}」です（{company['name']} は「{want_memo}」）"))
+    return issues
 
 
 def status_of(issues: list[Issue]) -> str:

@@ -295,3 +295,18 @@ class TestDorm(unittest.TestCase):
         res = gen.generate(dorm_req(category="2工場", title_choice="", count=4))
         self.assertEqual(len(res.title_counts), 1)
         self.assertEqual(sum(res.title_counts.values()), 4)
+
+
+class TestSheetErrorsInBase(unittest.TestCase):
+    def test_ref_cells_are_not_used(self):
+        sheets = []
+        for name, get in base_sheets():
+            if name == "応募資格・勤務時間・休日・キャッチコピー・待遇":
+                vals = [list(r) for r in get()]
+                vals[3][9] = "#REF!"  # 休日2 が IMPORTRANGE のエラーになっている
+                sheets.append((name, lambda vals=vals: vals))
+            else:
+                sheets.append((name, get))
+        b = g.load_bank(sheets, {"クルマ"})
+        self.assertEqual(b.parts["休日休暇"], ["休日1"])
+        self.assertEqual(b.error_cells, {"応募資格・勤務時間・休日・キャッチコピー・待遇": 1})

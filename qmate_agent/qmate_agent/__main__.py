@@ -82,7 +82,15 @@ def cmd_check(args) -> int:
 
     # GAS の検品は、GAS で作った出力シートだけが対象（ツールで生成した原稿は、このチェックで同じ項目を見る）
     sheet_issues = [] if args.csv or local is not None else inspection_issue(ms.name, verdicts, settings)
-    results = check_sheet(ms, rules, one_segment=getattr(args, "one_segment", False))
+    # 入稿先の会社が分かっているときは、応募時メール送信先1とメモの会社名がその会社のものかを確かめる
+    company_info = None
+    if getattr(args, "company", None):
+        try:
+            company_info = _company_info(settings, args)
+            print(f"応募先メールの確認: {company_info['name']} → {company_info['email'] or '（会社情報に無し）'}")
+        except Exception as e:
+            sheet_issues.append(Issue("error", "応募時メール送信先1", f"会社情報を読めず、応募先メールを確かめられません: {e}"))
+    results = check_sheet(ms, rules, one_segment=getattr(args, "one_segment", False), company=company_info)
     summaries = [""] * len(ms.rows)
     if not args.no_ai:
         from .ai_review import AIReviewer
@@ -129,6 +137,29 @@ def cmd_check(args) -> int:
     print(f"レポート: {out_dir / 'report.html'}")
     print(f"CSV: {out_dir / (ms.name + '.csv')}")
     return 0 if overall != "NG" else 2
+
+
+def _company_info(settings: dict, args) -> dict:
+    """土台の「会社情報」シートを読み直して、入稿先の会社の応募時メール送信先1と求人メモ用会社名を返す。"""
+    from . import generator
+
+    base_id = getattr(args, "base_spreadsheet_id", None) \
+        or settings["schedule_targets"][getattr(args, "commute", None) or "通勤"].get("base_spreadsheet_id")
+    if not base_id:
+        raise RuntimeError("土台のスプレッドシートが settings.json にありません")
+    sources = _spreadsheet(dict(settings, spreadsheet_id=base_id)).sources()
+    get = next((g for n, g in sources if n.strip() == "会社情報"), None) \
+        or next((g for n, g in sources if "会社情報" in n), None)
+    if get is None:
+        raise RuntimeError("土台に「会社情報」シートがありません")
+    bank = generator.Bank()
+    generator._read_role(bank, "companies", get(), set())
+    c = bank.companies.get(args.company)
+    if not c:
+        raise RuntimeError(f"会社情報シートに「{args.company}」がありません")
+    return {"name": args.company, "email": c.get("応募時メール送信先1", ""),
+            "memo_name": c.get("求人メモ用会社名") or args.company,
+            "others": {n: v.get("応募時メール送信先1", "") for n, v in bank.companies.items() if n != args.company}}
 
 
 def cmd_upload(args) -> int:
@@ -339,7 +370,8 @@ def cmd_schedule(args) -> int:
             for name in sheets:
                 print(f"\n--- チェック: {name} ---")
                 if cmd_check(SimpleNamespace(sheet=name, csv=None, no_ai=not settings.get("require_ai_check"),
-                                             one_segment=True, spreadsheet_id=t["spreadsheet_id"])) == 2:
+                                             one_segment=True, spreadsheet_id=t["spreadsheet_id"], company=p.company,
+                                             base_spreadsheet_id=t.get("base_spreadsheet_id"))) == 2:
                     raise RuntimeError(f"{name} のチェック結果が NG のため入稿しません。レポートを確認してください")
                 if p.company in takedown_companies and p.company not in takedown_done:
                     takedown_done[p.company] = _takedown(p.company, settings, args.headed, args.dry_run)
@@ -392,7 +424,8 @@ def _check_and_upload(manuscripts, p, t, settings, args, takedown_companies, tak
     for ms in manuscripts:
         print(f"\n--- チェック: {ms.name} ---")
         if cmd_check(SimpleNamespace(sheet=ms.name, csv=None, no_ai=not settings.get("require_ai_check"),
-                                     one_segment=True, spreadsheet_id=t["spreadsheet_id"], manuscript=ms)) == 2:
+                                     one_segment=True, spreadsheet_id=t["spreadsheet_id"], manuscript=ms,
+                                     company=p.company, base_spreadsheet_id=t.get("base_spreadsheet_id"))) == 2:
             raise RuntimeError(f"{ms.name} のチェック結果が NG のため入稿しません。レポートを確認してください")
         if p.company in takedown_companies and p.company not in takedown_done:
             takedown_done[p.company] = _takedown(p.company, settings, args.headed, args.dry_run)
@@ -565,6 +598,8 @@ def main(argv=None) -> int:
     g.add_argument("--sheet", help="出力シート名")
     g.add_argument("--csv", help="出力シートを書き出した CSV（テスト用）")
     c.add_argument("--no-ai", action="store_true", help="ルールチェックだけにする")
+    c.add_argument("--company", help="入稿先の会社（応募時メールとメモの会社名がこの会社のものか確かめる）")
+    c.add_argument("--commute", help="通勤 か 入寮（会社情報を読む土台。省略時は通勤）")
     c.set_defaults(func=cmd_check)
 
     u = sub.add_parser("upload", help="チェック済みの出力シートを Q-mate に入稿する")

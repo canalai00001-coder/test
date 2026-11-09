@@ -116,3 +116,53 @@ class TestCsv(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMustNotUpload(unittest.TestCase):
+    def test_sheet_error_values_are_errors(self):
+        for bad in ("#REF!", "#REF! (Cannot find range or sheet for imported range.)", "#N/A", "Loading...",
+                    "＜休日＞\n#VALUE!"):
+            issues = issues_of(clean_row(休日休暇=bad))[0]
+            self.assertEqual(status_of(issues), "NG", bad)
+            self.assertIn("休日休暇", cols(issues, "error"))
+        # 普通の文に # があってもエラーにはしない
+        self.assertEqual(issues_of(clean_row(休日休暇="＜休日＞\n#年間休日120日"))[0], [])
+
+    def test_holiday_blank_is_error(self):
+        self.assertIn("休日休暇", cols(issues_of(clean_row(休日休暇=""))[0], "error"))
+
+    def test_company_email(self):
+        row = clean_row()
+        email = row["応募時メール送信先1"]
+        memo_company = parse_memo(row["メモ"]).company
+        ok = {"name": "X社", "email": email, "memo_name": memo_company + "/G", "others": {"Y社": "y@example.com"}}
+        ms = Manuscript("出力_test", table(row))
+        self.assertEqual(check_sheet(ms, RULES, company=ok)[0], [])
+        # 別の会社のアドレスになっている
+        wrong = dict(ok, email="x@example.com", others={"Y社": email})
+        issues = check_sheet(ms, RULES, company=wrong)[0]
+        self.assertEqual(status_of(issues), "NG")
+        self.assertIn("Y社 のメールアドレスです", issues[0].message)
+        # 会社情報にアドレスが無いときも確かめられないので止める
+        self.assertEqual(status_of(check_sheet(ms, RULES, company=dict(ok, email=""))[0]), "NG")
+        # メモの会社名が違う
+        self.assertEqual(cols(check_sheet(ms, RULES, company=dict(ok, memo_name="Z社/G"))[0], "error"), ["メモ"])
+        # 同じアドレスがほかの会社にも登録されている（注意）
+        self.assertEqual(status_of(check_sheet(ms, RULES, company=dict(ok, others={"Y社": email}))[0]), "要確認")
+
+
+class TestCompanyInfo(unittest.TestCase):
+    def test_reads_company_sheet_of_base(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from qmate_agent import __main__ as cli
+        from tests.test_generator import base_sheets
+        book = SimpleNamespace(sources=lambda: base_sheets())
+        seen = []
+        with mock.patch.object(cli, "_spreadsheet", side_effect=lambda s: seen.append(s["spreadsheet_id"]) or book):
+            info = cli._company_info(RULES | {"schedule_targets": {"入寮": {"base_spreadsheet_id": "DORM"}}},
+                                     SimpleNamespace(company="AspiRove株式会社", base_spreadsheet_id="DORM"))
+            self.assertEqual((info["email"], info["memo_name"]), ("aspi@example.com", "AspiRove株式会社/G"))
+            self.assertEqual(seen, ["DORM"])
+            with self.assertRaisesRegex(RuntimeError, "ありません"):
+                cli._company_info({}, SimpleNamespace(company="無い会社", base_spreadsheet_id="DORM"))
