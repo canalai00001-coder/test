@@ -3,7 +3,9 @@
  *
  * 実行設定シートに手で入力したときと同じ補助を、入稿予定表でも行う。
  *   - 職種名選択：6重め・7軽めのときだけ、その職種の職種名のプルダウンにする。
- *                 同じ会社で30日以内に使った職種名はプルダウンから外し、選んだときは重複警告を出す。
+ *                 次の職種名はプルダウンに出さない（候補にない値は入れられない）。
+ *                   ・同じ会社で30日以内に使った職種名
+ *                   ・同じ会社・職種の、まだ実行していない別の行で選んでいる職種名
  *   - スタンバイキーワード：通勤／入寮それぞれの土台にある候補のプルダウンにする。
  *   - 会社・職種・通勤/入寮を変えたら、職種名選択を消して選び直してもらう。
  *   - 「職種名の確認」列に、その職種名が使えるか（30日以内に使っていないか、通勤/入寮の一覧にあるか）を書く。
@@ -44,9 +46,6 @@ function setupQmatePlanHelper() {
   ScriptApp.newTrigger('qmatePlanOnOpen').forSpreadsheet(ss).onOpen().create();
   ScriptApp.newTrigger('qmatePlanCheckAll').timeBased().everyDays(1).atHour(6).create();
 
-  const sh = ss.getSheetByName(QMATE_PLAN_SHEET_NAME);
-  const cols = qmatePlanColumns_(sh);
-  for (let r = 2; r <= sh.getLastRow(); r++) qmatePlanRefreshRow_(sh, cols, r, false);
   qmatePlanCheckAll();
   qmatePlanOnOpen();
   ss.toast('入稿予定表の入力補助を設定しました', 'Q-mate', 5);
@@ -62,13 +61,17 @@ function qmatePlanOnOpen() {
   }
 }
 
-// 全部の行の「職種名の確認」を書き直す（毎朝6時・メニューから）
+// 全部の行のプルダウンと「職種名の確認」を作り直す（毎朝6時・メニューから）。
+// 30日ルールで外れる職種名は日ごとに変わるので、プルダウンの候補も作り直す
 function qmatePlanCheckAll() {
   const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(QMATE_PLAN_SHEET_NAME);
   if (!sh || sh.getLastRow() < 2) return;
   const cols = qmatePlanColumns_(sh);
   const cache = {};
-  for (let r = 2; r <= sh.getLastRow(); r++) qmatePlanCheckRow_(sh, cols, r, cache);
+  for (let r = 2; r <= sh.getLastRow(); r++) {
+    qmatePlanRefreshRow_(sh, cols, r, false, cache);
+    qmatePlanCheckRow_(sh, cols, r, cache);
+  }
   try {
     SpreadsheetApp.getActiveSpreadsheet().toast('職種名の確認をやり直しました', '入稿予定表', 5);
   } catch (err) {
@@ -92,8 +95,13 @@ function qmatePlanOnEdit(e) {
     const r2 = e.range.getRow() + e.range.getNumRows() - 1;
     const cache = {};
     for (let r = r1; r <= r2; r++) {
-      if (keyChanged) qmatePlanRefreshRow_(sh, cols, r, true);
-      else qmatePlanWarnIfRecentlyUsed_(sh, cols, r);
+      if (keyChanged) qmatePlanRefreshRow_(sh, cols, r, true, cache);
+      else qmatePlanWarnIfRecentlyUsed_(sh, cols, r, cache);
+    }
+    // ある行で職種名を選ぶ・変えると、同じ会社・職種のほかの行で選べる職種名も変わるので、
+    // まだ実行していない行のプルダウンと確認を全部作り直す
+    for (let r = 2; r <= sh.getLastRow(); r++) {
+      if (!(keyChanged && r1 <= r && r <= r2)) qmatePlanRefreshRow_(sh, cols, r, false, cache);
       qmatePlanCheckRow_(sh, cols, r, cache);
     }
   } catch (err) {
@@ -113,15 +121,63 @@ function qmatePlanColumns_(sh) {
   return cols;
 }
 
-function qmatePlanRow_(sh, cols, r) {
-  const v = name => cols[name] ? String(sh.getRange(r, cols[name]).getValue() || '').trim() : '';
+// 入稿予定表の1行。cache.plan に表全体を読んでおき、行ごとにシートを読みに行かない
+function qmatePlanRow_(sh, cols, r, cache) {
+  cache = cache || {};
+  if (!cache.plan) cache.plan = sh.getDataRange().getValues();
+  const vals = cache.plan[r - 1] || [];
+  const v = name => cols[name] ? String(vals[cols[name] - 1] || '').trim() : '';
   return {
+    row: r,
     company: v('会社'),
     category: v('職種'),
     commute: v('通勤/入寮') === '入寮' ? '入寮' : '通勤',
-    title: v('職種名選択'),
+    title: qmatePlanBareTitle_(v('職種名選択')),
     result: v('実行結果'),
   };
+}
+
+// 「7軽め｜職種名」→「職種名」
+function qmatePlanBareTitle_(t) {
+  return t.indexOf('｜') >= 0 ? t.slice(t.indexOf('｜') + 1) : t;
+}
+
+function qmatePlanKey_(row) {
+  return `${row.commute}|${row.company}|${row.category}`;
+}
+
+// 同じ会社・職種・通勤/入寮の、まだ実行していない別の行で選んでいる職種名 → その行番号
+function qmatePlanTakenByOthers_(sh, cols, row, cache) {
+  const taken = {};
+  for (let r = 2; r <= sh.getLastRow(); r++) {
+    if (r === row.row) continue;
+    const o = qmatePlanRow_(sh, cols, r, cache);
+    if (o.title && !qmatePlanIsDone_(o.result) && qmatePlanKey_(o) === qmatePlanKey_(row)) {
+      (taken[o.title] = taken[o.title] || []).push(r);
+    }
+  }
+  return taken;
+}
+
+// 土台・職種名一覧・使用履歴を、同じ実行のあいだ使い回す
+function qmatePlanBase_(cache, commute) {
+  cache.bases = cache.bases || {};
+  if (!cache.bases[commute]) cache.bases[commute] = SpreadsheetApp.openById(QMATE_PLAN_BASE_IDS[commute]);
+  return cache.bases[commute];
+}
+
+function qmatePlanTitles_(cache, commute, kind) {
+  cache.titles = cache.titles || {};
+  const k = `${commute}|${kind}`;
+  if (!cache.titles[k]) cache.titles[k] = qmatePlanPairedTitles_(qmatePlanBase_(cache, commute), kind);
+  return cache.titles[k];
+}
+
+function qmatePlanUsed_(cache, row) {
+  cache.used = cache.used || {};
+  const k = qmatePlanKey_(row);
+  if (!cache.used[k]) cache.used[k] = row.company ? qmatePlanLastUsed_(qmatePlanBase_(cache, row.commute), row.company, row.category) : {};
+  return cache.used[k];
 }
 
 // 「職種名の確認」列の番号。無ければ見出しの右端に作る
@@ -134,26 +190,18 @@ function qmatePlanCheckColumn_(sh, cols) {
   return col;
 }
 
-// 1行分の「職種名の確認」を書く。cache は土台・職種名一覧・使用履歴を同じ実行のあいだ使い回すためのもの
+// 1行分の「職種名の確認」を書く
 function qmatePlanCheckRow_(sh, cols, r, cache) {
   const col = qmatePlanCheckColumn_(sh, cols);
-  const row = qmatePlanRow_(sh, cols, r);
+  const row = qmatePlanRow_(sh, cols, r, cache);
   const m = row.category.match(/^\d+(重め|軽め)$/);
-  let titles = null, used = {};
+  let titles = null, used = {}, taken = {};
   if (m && row.title && !qmatePlanIsDone_(row.result)) {
-    const baseKey = row.commute;
-    cache.bases = cache.bases || {};
-    if (!cache.bases[baseKey]) cache.bases[baseKey] = SpreadsheetApp.openById(QMATE_PLAN_BASE_IDS[baseKey]);
-    const tKey = `${row.commute}|${m[1]}`;
-    cache.titles = cache.titles || {};
-    if (!cache.titles[tKey]) cache.titles[tKey] = qmatePlanPairedTitles_(cache.bases[baseKey], m[1]);
-    titles = cache.titles[tKey];
-    const uKey = `${row.commute}|${row.company}|${row.category}`;
-    cache.used = cache.used || {};
-    if (!cache.used[uKey]) cache.used[uKey] = qmatePlanLastUsed_(cache.bases[baseKey], row.company, row.category);
-    used = cache.used[uKey];
+    titles = qmatePlanTitles_(cache, row.commute, m[1]);
+    used = qmatePlanUsed_(cache, row);
+    taken = qmatePlanTakenByOthers_(sh, cols, row, cache);
   }
-  const text = qmatePlanCheckText_(row, titles, used, new Date());
+  const text = qmatePlanCheckText_(row, titles, used, new Date(), taken);
   const titleCol = cols['職種名選択'];
   sh.getRange(r, col).setValue(text);
   const ng = text.indexOf('❌') === 0;
@@ -168,13 +216,13 @@ function qmatePlanIsDone_(result) {
 
 // 確認の文言（画面を触らない部分。Node でもテストできるように分けてある）
 // titles：その通勤/入寮・職種の職種名一覧（6重め・7軽め以外は null）、used：{ 職種名: 直近使用日 }
-function qmatePlanCheckText_(row, titles, used, now) {
+function qmatePlanCheckText_(row, titles, used, now, taken) {
   if (!row.company && !row.category) return '';
   if (qmatePlanIsDone_(row.result)) return '';
   const m = row.category.match(/^\d+(重め|軽め)$/);
   if (!m) return row.category ? '✅ 職種名は自動で選びます（30日以内に使ったものは選びません）' : '';
   if (!row.title) return '❌ 職種名選択を選んでください';
-  const title = row.title.indexOf('｜') >= 0 ? row.title.slice(row.title.indexOf('｜') + 1) : row.title;
+  const title = qmatePlanBareTitle_(row.title);
   if (titles && titles.indexOf(title) < 0) {
     return `❌ ${row.commute}用の${row.category}にない職種名です。職種名選択を選び直してください`;
   }
@@ -184,50 +232,57 @@ function qmatePlanCheckText_(row, titles, used, now) {
     const ok = new Date(last.getTime() + QMATE_PLAN_COOLDOWN_DAYS * 86400000);
     return `❌ ${fmt(last)}に使用済み。${fmt(ok)}から使えます。別の職種名を選んでください`;
   }
+  const others = (taken || {})[title];
+  if (others && others.length) {
+    return `❌ ${others.join('・')}行目でも同じ職種名を選んでいます。どちらかを別の職種名にしてください`;
+  }
   return last ? `✅ 使えます（前回 ${fmt(last)}）` : '✅ 使えます';
 }
 
 // 1行分のプルダウンを付け直す。clearTitle が true なら選んであった職種名を消す（会社・職種・通勤/入寮を変えたとき）
-function qmatePlanRefreshRow_(sh, cols, r, clearTitle) {
-  const row = qmatePlanRow_(sh, cols, r);
+function qmatePlanRefreshRow_(sh, cols, r, clearTitle, cache) {
+  cache = cache || {};
+  const row = qmatePlanRow_(sh, cols, r, cache);
   const titleCell = cols['職種名選択'] ? sh.getRange(r, cols['職種名選択']) : null;
   if (!row.company && !row.category) {
     if (titleCell && clearTitle) titleCell.clearContent().clearDataValidations();
     return;
   }
-  const base = SpreadsheetApp.openById(QMATE_PLAN_BASE_IDS[row.commute]);
+  if (qmatePlanIsDone_(row.result)) return; // 実行済みの行はそのままにする
 
   if (cols['スタンバイキーワード']) {
-    const keywords = qmatePlanStandbyKeywords_(base, row.commute);
-    const cell = sh.getRange(r, cols['スタンバイキーワード']);
-    if (keywords.length) {
-      cell.setDataValidation(SpreadsheetApp.newDataValidation()
-        .requireValueInRange(qmatePlanListRange_(`スタンバイキーワード｜${row.commute}`, keywords), true)
-        .setAllowInvalid(true).build());
+    cache.keywords = cache.keywords || {};
+    if (!cache.keywords[row.commute]) {
+      const keywords = qmatePlanStandbyKeywords_(qmatePlanBase_(cache, row.commute), row.commute);
+      cache.keywords[row.commute] = keywords.length
+        ? qmatePlanListRange_(`スタンバイキーワード｜${row.commute}`, keywords) : null;
+    }
+    if (cache.keywords[row.commute]) {
+      sh.getRange(r, cols['スタンバイキーワード']).setDataValidation(SpreadsheetApp.newDataValidation()
+        .requireValueInRange(cache.keywords[row.commute], true).setAllowInvalid(true).build());
     }
   }
 
   if (!titleCell) return;
   const m = row.category.match(/^\d+(重め|軽め)$/);
-  if (clearTitle) titleCell.clearContent();
+  if (clearTitle) {
+    titleCell.clearContent();
+    if (cache.plan && cols['職種名選択']) cache.plan[r - 1][cols['職種名選択'] - 1] = '';
+    row.title = '';
+  }
   if (!m) {
     titleCell.clearDataValidations();
     return;
   }
-  let titles = qmatePlanPairedTitles_(base, m[1]);
-  if (row.company) {
-    const used = qmatePlanLastUsed_(base, row.company, row.category);
-    const fresh = titles.filter(t => !qmatePlanIsRecent_(used[t]));
-    // 全部使用済みのときは、プルダウンが空になるより全件を出す（選ぶと重複警告が出る）
-    if (fresh.length) titles = fresh;
-  }
-  if (!titles.length) {
-    titleCell.clearDataValidations();
-    return;
-  }
+  const used = qmatePlanUsed_(cache, row);
+  const taken = qmatePlanTakenByOthers_(sh, cols, row, cache);
+  let titles = qmatePlanTitles_(cache, row.commute, m[1])
+    .filter(t => !qmatePlanIsRecent_(used[t]) && !taken[t]);
+  if (!titles.length) titles = ['（使える職種名がありません）'];
+  // 行ごとに候補が違う（ほかの行で選んだ職種名を外す）ので、候補の列は行ごとに作る
   titleCell.setDataValidation(SpreadsheetApp.newDataValidation()
-    .requireValueInRange(qmatePlanListRange_(`職種名選択｜${row.commute}｜${row.company}｜${row.category}`, titles), true)
-    .setAllowInvalid(true).build());
+    .requireValueInRange(qmatePlanListRange_(`職種名選択｜${r}行目`, titles), true)
+    .setAllowInvalid(false).setHelpText('30日以内に使った職種名と、ほかの行で選んでいる職種名は出ません').build());
 }
 
 // 候補の一覧を隠しシートの1列に書き、その範囲を返す。1行目は「職種名選択｜通勤｜会社｜7軽め」のような見出しで、
@@ -254,12 +309,11 @@ function qmatePlanListRange_(key, values) {
   return sh.getRange(2, col, values.length, 1);
 }
 
-function qmatePlanWarnIfRecentlyUsed_(sh, cols, r) {
-  const row = qmatePlanRow_(sh, cols, r);
+function qmatePlanWarnIfRecentlyUsed_(sh, cols, r, cache) {
+  const row = qmatePlanRow_(sh, cols, r, cache);
   if (!row.company || !row.category || !row.title) return;
-  const title = row.title.indexOf('｜') >= 0 ? row.title.slice(row.title.indexOf('｜') + 1) : row.title;
-  const base = SpreadsheetApp.openById(QMATE_PLAN_BASE_IDS[row.commute]);
-  const lastUsed = qmatePlanLastUsed_(base, row.company, row.category)[title];
+  const title = row.title;
+  const lastUsed = qmatePlanUsed_(cache, row)[title];
   if (!qmatePlanIsRecent_(lastUsed)) return;
   const days = Math.floor((new Date() - lastUsed) / 86400000);
   const msg = `${title} は ${row.company} で${days}日前に使っています（${QMATE_PLAN_COOLDOWN_DAYS}日以内）。` +
