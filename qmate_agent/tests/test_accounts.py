@@ -143,3 +143,21 @@ class TestFillUrl(unittest.TestCase):
             self.assertFalse(accounts.fill_url(SETTINGS, "C社", url))   # シートに無い会社
             self.assertFalse(accounts.fill_url(SETTINGS, "A社", "https://m.q-mate.jp/job_offers"))  # co が無い
         self.assertEqual(written, [(2, 4, url)])
+
+
+class TestSheetIsAlwaysTheMainSpreadsheet(unittest.TestCase):
+    def test_dorm_spreadsheet_id_is_ignored(self):
+        # 入寮の行を入稿するときは settings の spreadsheet_id が入寮用に差し替わっているが、ログイン情報は本体のシートを見る
+        seen = []
+
+        class FakeSpreadsheet:
+            def __init__(self, s):
+                seen.append(s["spreadsheet_id"])
+                self.book = FakeBook(SHEET_VALUES, [])
+
+        main_id = config.load("settings.json")["spreadsheet_id"]
+        with mock.patch("qmate_agent.sheet.Spreadsheet", FakeSpreadsheet), \
+                mock.patch.dict(accounts._sheet_cache, clear=True), mock.patch.object(accounts, "load", return_value={}):
+            q = accounts.qmate_config(dict(SETTINGS, spreadsheet_id="入寮用のID"), "ArK株式会社")
+        self.assertEqual(q["login_id"], "ark@example.com")
+        self.assertEqual(seen, [main_id])

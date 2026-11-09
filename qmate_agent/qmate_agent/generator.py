@@ -595,12 +595,15 @@ class Generator:
             sel = req.title_choice.split("｜", 1)[-1]
             entry = next((e for e in paired if e["title"] == sel), None)
             if not entry:
-                raise ValueError(f"「{sel}」が{cat}シートの職種名一覧に見つかりません")
+                raise ValueError(f"「{sel}」が{req.commute}用の土台の{CATEGORY_NUMBER_LABEL.get(cat, cat)}シートに見つかりません。"
+                                 f"入稿予定表の職種名選択を、{req.commute}の候補から選び直してください"
+                                 "（通勤と入寮では職種名の一覧が違います）")
             titles, contents, letter = [entry["title"]], entry["contents"], entry["letter"]
             if not contents:
                 raise ValueError(f"「{entry['title']}」のお仕事内容(D列以降)が見つかりません")
             if entry["title"] in recent:
-                raise ValueError(f"重複警告: {entry['title']}は使用履歴に存在しています。")
+                raise ValueError(f"重複警告: {entry['title']}は {req.company} で{used[entry['title']]:%m/%d}に使っています"
+                                 f"（{COOLDOWN_DAYS}日たつまで同じ職種名は使えません）。入稿予定表の職種名選択で別の職種名を選んでください")
         else:
             all_titles = bank.job_titles.get(req.category) or []
             if not all_titles:

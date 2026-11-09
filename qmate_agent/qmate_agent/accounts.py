@@ -27,8 +27,17 @@ _sheet_cache: dict = {}
 
 
 def _sheet_book(settings: dict):
+    """ログイン情報シートがあるスプレッドシート。入寮用など別のスプレッドシートを扱っているときでも、
+    settings.json の spreadsheet_id（入稿予定表のある本体）を見る。"""
     from .sheet import Spreadsheet
-    return Spreadsheet(settings).book
+    return Spreadsheet(dict(settings, spreadsheet_id=_home_id(settings))).book
+
+
+def _home_id(settings: dict) -> str:
+    try:
+        return config.load("settings.json")["spreadsheet_id"]
+    except Exception:
+        return settings.get("spreadsheet_id", "")
 
 
 def _is_public(book) -> bool:
@@ -38,7 +47,7 @@ def _is_public(book) -> bool:
 
 def sheet_status(settings: dict) -> dict:
     """{"rows": {会社名: {...}}, "public": bool, "error": str}。1回の実行のあいだは読み直さない。"""
-    key = settings.get("spreadsheet_id", "")
+    key = _home_id(settings)
     if key in _sheet_cache:
         return _sheet_cache[key]
     import gspread
