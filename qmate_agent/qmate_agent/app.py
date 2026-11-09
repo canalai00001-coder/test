@@ -163,6 +163,7 @@ class App:
         results = self._results(book, settings)
         for p in plans:
             p["result"] = results["plan"].get(p["row"], "")
+            p["check"] = results["plan_check"].get(p["row"], "")
         for r in tds:
             r["result"] = results["takedown"].get(r["row"], "")
         return {"today": fmt(today), "plans": plans, "takedowns": tds, "engines": self.engines(),
@@ -173,12 +174,13 @@ class App:
         out = {}
         for key, sheet in (("plan", settings["plan_sheet"]), ("takedown", settings.get("takedown_sheet", "取り下げ予定表"))):
             table = book.plan_table(sheet)
-            out[key] = {}
+            out[key], out[key + "_check"] = {}, {}
             if table:
                 head = [str(h).strip() for h in table[0]]
-                if "実行結果" in head:
-                    c = head.index("実行結果")
-                    out[key] = {i: str(r[c]) for i, r in enumerate(table[1:], start=2) if c < len(r) and r[c]}
+                for name, k in (("実行結果", key), ("職種名の確認", key + "_check")):
+                    if name in head:
+                        c = head.index(name)
+                        out[k] = {i: str(r[c]) for i, r in enumerate(table[1:], start=2) if c < len(r) and r[c]}
         return out
 
     def checks(self) -> list[dict]:
@@ -481,12 +483,15 @@ const opt=()=>({dry_run:p_dry.checked,headed:p_headed.checked,force:p_force.chec
 async function load(){plans.innerHTML=takedowns.innerHTML='<div class="empty">読み込んでいます…</div>';
  try{const d=await api("/api/overview");today.textContent="今日："+d.today;showEngines(d.engines);
   t_company.innerHTML=d.companies.map(c=>`<option>${esc(c)}</option>`).join("");
-  plans.innerHTML=d.plans.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>職種</th><th>夜勤</th><th>通勤/入寮</th><th>ステータス</th><th>原稿数</th><th>職種名選択</th><th>実行結果</th><th></th></tr>`+d.plans.map(p=>`<tr class="${p.today?"today":""}"><td>${p.row}</td><td>${esc(p.date)}</td><td>${esc(p.company)}</td><td>${esc(p.category)}</td><td>${p.night}</td><td>${esc(p.commute)}</td><td>${esc(p.status)}</td><td>${p.count}</td><td>${esc(p.title)}</td><td>${esc(p.result)}</td><td><button class="btn" onclick="runRow(${p.row},'${esc(p.status)}',${p.count})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
+  PLANS=d.plans;
+  plans.innerHTML=d.plans.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>職種</th><th>夜勤</th><th>通勤/入寮</th><th>ステータス</th><th>原稿数</th><th>職種名選択</th><th>職種名の確認</th><th>実行結果</th><th></th></tr>`+d.plans.map(p=>`<tr class="${p.today?"today":""}"><td>${p.row}</td><td>${esc(p.date)}</td><td>${esc(p.company)}</td><td>${esc(p.category)}</td><td>${p.night}</td><td>${esc(p.commute)}</td><td>${esc(p.status)}</td><td>${p.count}</td><td>${esc(p.title)}</td><td class="${p.check.startsWith("❌")?"ng":""}">${esc(p.check)}</td><td>${esc(p.result)}</td><td><button class="btn" onclick="runRow(${p.row},'${esc(p.status)}',${p.count})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
   takedowns.innerHTML=d.takedowns.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>作成日から</th><th>作成日まで</th><th>メモ</th><th>ステータス</th><th>実行結果</th><th></th></tr>`+d.takedowns.map(r=>`<tr class="${r.today?"today":""}"><td>${r.row}</td><td>${esc(r.date)}</td><td>${esc(r.company)}</td><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td>${esc(r.memo)}</td><td>${esc(r.status)}</td><td>${esc(r.result)}</td><td><button class="btn danger" onclick="runTdRow(${r.row})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
  }catch(e){plans.innerHTML=`<div class="ng">読み込めませんでした：${esc(e.message)}</div>`;takedowns.innerHTML=""}}
 async function start(p,b,msg){if(msg&&!confirm(msg))return;try{await post(p,b);since=0;log.textContent="";poll()}catch(e){alert(e.message)}}
-run_today.onclick=()=>start("/api/schedule",opt(),"入稿予定表・取り下げ予定表の今日の行を実行します。\n取り下げ予定表の行は Q-mate の原稿を削除します（元に戻せません）。よろしいですか？");
-function runRow(row,status,count){start("/api/schedule",{...opt(),row},`入稿予定表 ${row}行目（${status}・${count}件）を実行します。よろしいですか？`)}
+run_today.onclick=()=>start("/api/schedule",opt(),"入稿予定表・取り下げ予定表の今日の行を実行します。\n取り下げ予定表の行は Q-mate の原稿を削除します（元に戻せません）。よろしいですか？"+ngNote(PLANS.filter(p=>p.today&&p.check.startsWith("❌"))));
+let PLANS=[];
+const ngNote=rows=>rows.length?`\n\n※ 職種名の確認が ❌ の行があります（${rows.map(p=>p.row+"行目").join("、")}）。このまま実行すると、その行は生成で止まります。`:"";
+function runRow(row,status,count){const ng=PLANS.filter(p=>p.row===row&&p.check.startsWith("❌"));start("/api/schedule",{...opt(),row},`入稿予定表 ${row}行目（${status}・${count}件）を実行します。よろしいですか？`+ngNote(ng))}
 function runTdRow(row){start("/api/schedule",{...opt(),takedown_row:row},`取り下げ予定表 ${row}行目を実行します。\nQ-mate の原稿を削除します（元に戻せません）。よろしいですか？`)}
 const tBody=()=>({company:t_company.value,date_from:t_from.value,date_to:t_to.value,memo:t_memo.value.trim(),status:t_status.value,headed:t_headed.checked});
 const span=b=>!b.date_from&&!b.date_to?"全期間":b.date_from===b.date_to?b.date_from:`${b.date_from||"最初"}〜${b.date_to||"最後"}`;

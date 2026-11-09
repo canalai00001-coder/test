@@ -6,13 +6,17 @@
  *                 同じ会社で30日以内に使った職種名はプルダウンから外し、選んだときは重複警告を出す。
  *   - スタンバイキーワード：通勤／入寮それぞれの土台にある候補のプルダウンにする。
  *   - 会社・職種・通勤/入寮を変えたら、職種名選択を消して選び直してもらう。
+ *   - 「職種名の確認」列に、その職種名が使えるか（30日以内に使っていないか、通勤/入寮の一覧にあるか）を書く。
+ *     使えないときはセルを赤くする。毎朝6時と、メニュー「入稿予定表 → 職種名の確認をやり直す」で全行を確かめ直す
+ *     （予定を入れたあとに、ほかの行の入稿で使用済みになることがあるため）。
  * 通勤の行は通勤用の土台、入寮の行は入寮用の土台（職種名・候補・使用履歴）を見る。
  *
  * 既存のコード（Code.gs）は変更せず、このファイルを同じ Apps Script プロジェクトに追加する。
  * 【設定方法】
  *   1. 左の「ファイル」の＋ →「スクリプト」で plan_sheet_helper という名前のファイルを作り、この内容を貼り付けて保存
  *   2. 上の関数選択で setupQmatePlanHelper を選んで「実行」→ 権限を許可
- *      （入稿予定表を編集したときに動く設定を作り、今入っている行にもプルダウンを付ける）
+ *      （入稿予定表を編集したときに動く設定・メニュー・毎朝の確認を作り、今入っている行にもプルダウンと確認を付ける）
+ *   ※ このファイルを貼り直したときも、もう一度 setupQmatePlanHelper を実行してください
  */
 
 const QMATE_PLAN_SHEET_NAME = '入稿予定表';
@@ -25,19 +29,51 @@ const QMATE_PLAN_USAGE_SHEET = 'アカウント×職種名_使用履歴';
 // （候補を直接プルダウンに入れると500件までしか入らず、7軽めの職種名は入りきらない）
 const QMATE_PLAN_LIST_SHEET = '_入稿予定表_候補（自動生成・編集不要）';
 const QMATE_PLAN_COOLDOWN_DAYS = 30; // 生成側（Code.gs の COOLDOWN_DAYS）と同じ日数
+const QMATE_PLAN_CHECK_HEADER = '職種名の確認';
+const QMATE_PLAN_NG_COLOR = '#F4CCCC';
 
 function setupQmatePlanHelper() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const mine = ['qmatePlanOnEdit', 'qmatePlanOnOpen', 'qmatePlanCheckAll'];
   ScriptApp.getProjectTriggers().forEach(t => {
-    if (t.getHandlerFunction() === 'qmatePlanOnEdit') ScriptApp.deleteTrigger(t);
+    if (mine.indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
   });
   // 土台を開く必要があるため、普通の onEdit ではなく「インストール型」の編集時トリガーにする
   ScriptApp.newTrigger('qmatePlanOnEdit').forSpreadsheet(ss).onEdit().create();
+  // Code.gs に onOpen があるので、メニューはインストール型の起動時トリガーで足す
+  ScriptApp.newTrigger('qmatePlanOnOpen').forSpreadsheet(ss).onOpen().create();
+  ScriptApp.newTrigger('qmatePlanCheckAll').timeBased().everyDays(1).atHour(6).create();
 
   const sh = ss.getSheetByName(QMATE_PLAN_SHEET_NAME);
   const cols = qmatePlanColumns_(sh);
   for (let r = 2; r <= sh.getLastRow(); r++) qmatePlanRefreshRow_(sh, cols, r, false);
+  qmatePlanCheckAll();
+  qmatePlanOnOpen();
   ss.toast('入稿予定表の入力補助を設定しました', 'Q-mate', 5);
+}
+
+function qmatePlanOnOpen() {
+  try {
+    SpreadsheetApp.getUi().createMenu('入稿予定表')
+      .addItem('職種名の確認をやり直す', 'qmatePlanCheckAll')
+      .addToUi();
+  } catch (err) {
+    Logger.log('qmatePlanOnOpen: ' + err.message);
+  }
+}
+
+// 全部の行の「職種名の確認」を書き直す（毎朝6時・メニューから）
+function qmatePlanCheckAll() {
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(QMATE_PLAN_SHEET_NAME);
+  if (!sh || sh.getLastRow() < 2) return;
+  const cols = qmatePlanColumns_(sh);
+  const cache = {};
+  for (let r = 2; r <= sh.getLastRow(); r++) qmatePlanCheckRow_(sh, cols, r, cache);
+  try {
+    SpreadsheetApp.getActiveSpreadsheet().toast('職種名の確認をやり直しました', '入稿予定表', 5);
+  } catch (err) {
+    // 毎朝の自動実行では画面がないので何もしない
+  }
 }
 
 function qmatePlanOnEdit(e) {
@@ -54,9 +90,11 @@ function qmatePlanOnEdit(e) {
 
     const r1 = Math.max(e.range.getRow(), 2);
     const r2 = e.range.getRow() + e.range.getNumRows() - 1;
+    const cache = {};
     for (let r = r1; r <= r2; r++) {
       if (keyChanged) qmatePlanRefreshRow_(sh, cols, r, true);
       else qmatePlanWarnIfRecentlyUsed_(sh, cols, r);
+      qmatePlanCheckRow_(sh, cols, r, cache);
     }
   } catch (err) {
     Logger.log('qmatePlanOnEdit: ' + err.message);
@@ -82,7 +120,71 @@ function qmatePlanRow_(sh, cols, r) {
     category: v('職種'),
     commute: v('通勤/入寮') === '入寮' ? '入寮' : '通勤',
     title: v('職種名選択'),
+    result: v('実行結果'),
   };
+}
+
+// 「職種名の確認」列の番号。無ければ見出しの右端に作る
+function qmatePlanCheckColumn_(sh, cols) {
+  if (cols[QMATE_PLAN_CHECK_HEADER]) return cols[QMATE_PLAN_CHECK_HEADER];
+  const col = sh.getLastColumn() + 1;
+  if (col > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), 1);
+  sh.getRange(1, col).setValue(QMATE_PLAN_CHECK_HEADER).setFontWeight('bold');
+  cols[QMATE_PLAN_CHECK_HEADER] = col;
+  return col;
+}
+
+// 1行分の「職種名の確認」を書く。cache は土台・職種名一覧・使用履歴を同じ実行のあいだ使い回すためのもの
+function qmatePlanCheckRow_(sh, cols, r, cache) {
+  const col = qmatePlanCheckColumn_(sh, cols);
+  const row = qmatePlanRow_(sh, cols, r);
+  const m = row.category.match(/^\d+(重め|軽め)$/);
+  let titles = null, used = {};
+  if (m && row.title && !qmatePlanIsDone_(row.result)) {
+    const baseKey = row.commute;
+    cache.bases = cache.bases || {};
+    if (!cache.bases[baseKey]) cache.bases[baseKey] = SpreadsheetApp.openById(QMATE_PLAN_BASE_IDS[baseKey]);
+    const tKey = `${row.commute}|${m[1]}`;
+    cache.titles = cache.titles || {};
+    if (!cache.titles[tKey]) cache.titles[tKey] = qmatePlanPairedTitles_(cache.bases[baseKey], m[1]);
+    titles = cache.titles[tKey];
+    const uKey = `${row.commute}|${row.company}|${row.category}`;
+    cache.used = cache.used || {};
+    if (!cache.used[uKey]) cache.used[uKey] = qmatePlanLastUsed_(cache.bases[baseKey], row.company, row.category);
+    used = cache.used[uKey];
+  }
+  const text = qmatePlanCheckText_(row, titles, used, new Date());
+  const titleCol = cols['職種名選択'];
+  sh.getRange(r, col).setValue(text);
+  const ng = text.indexOf('❌') === 0;
+  sh.getRange(r, col).setBackground(ng ? QMATE_PLAN_NG_COLOR : null);
+  if (titleCol) sh.getRange(r, titleCol).setBackground(ng ? QMATE_PLAN_NG_COLOR : null);
+}
+
+// 実行結果が入っていて失敗ではない行（入稿済み・CSV作成まで）は、もう確かめない
+function qmatePlanIsDone_(result) {
+  return !!result && result.indexOf('失敗') !== 0;
+}
+
+// 確認の文言（画面を触らない部分。Node でもテストできるように分けてある）
+// titles：その通勤/入寮・職種の職種名一覧（6重め・7軽め以外は null）、used：{ 職種名: 直近使用日 }
+function qmatePlanCheckText_(row, titles, used, now) {
+  if (!row.company && !row.category) return '';
+  if (qmatePlanIsDone_(row.result)) return '';
+  const m = row.category.match(/^\d+(重め|軽め)$/);
+  if (!m) return row.category ? '✅ 職種名は自動で選びます（30日以内に使ったものは選びません）' : '';
+  if (!row.title) return '❌ 職種名選択を選んでください';
+  const title = row.title.indexOf('｜') >= 0 ? row.title.slice(row.title.indexOf('｜') + 1) : row.title;
+  if (titles && titles.indexOf(title) < 0) {
+    return `❌ ${row.commute}用の${row.category}にない職種名です。職種名選択を選び直してください`;
+  }
+  const last = used[title];
+  const fmt = d => `${d.getMonth() + 1}/${d.getDate()}`;
+  if (last && (now - last) / 86400000 < QMATE_PLAN_COOLDOWN_DAYS) {
+    const ok = new Date(last.getTime() + QMATE_PLAN_COOLDOWN_DAYS * 86400000);
+    return `❌ ${fmt(last)}に使用済み。${fmt(ok)}から使えます。別の職種名を選んでください`;
+  }
+  return last ? `✅ 使えます（前回 ${fmt(last)}）` : '✅ 使えます';
 }
 
 // 1行分のプルダウンを付け直す。clearTitle が true なら選んであった職種名を消す（会社・職種・通勤/入寮を変えたとき）
