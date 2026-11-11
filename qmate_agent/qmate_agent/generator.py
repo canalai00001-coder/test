@@ -1069,7 +1069,11 @@ def run(settings: dict, target: dict, req: Request, *, record_usage: bool = True
     main = Spreadsheet(dict(settings, spreadsheet_id=target["spreadsheet_id"]))
     cat = next((c for c in CATEGORY_NAMES if c in req.category), None)
     log("土台を読み込んでいます")
-    bank = load_bank(base.sources() + main.sources(), {cat} if cat else set(), dorm=req.commute == "入寮" if dorm is None else dorm)
+    # 本体（入稿予定表のあるスプレッドシート）からは「テンプレート(固定列)」だけを読む。
+    # 使用方法・給与設定・メモ用のシートなどが中身で文例のシートと判定され、原稿に混ざるのを防ぐ
+    main_sources = [(n, get) for n, get in main.sources() if "テンプレート" in n]
+    bank = load_bank(base.sources() + main_sources, {cat} if cat else set(),
+                     dorm=req.commute == "入寮" if dorm is None else dorm)
     usage = base.usage_rows(USAGE_SHEET)
     gen = Generator(bank, usage, rng=rng)
     result = gen.generate(req, ignore_cooldown=ignore_cooldown)
