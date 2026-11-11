@@ -277,9 +277,9 @@ function qmatePlanCheckColumn_(sh, cols) {
   return col;
 }
 
-// 実行結果が入っていて失敗ではない行（入稿済み・CSV作成まで）は、もう確かめない
+// 入稿済みの行は、もう確かめない（「テスト：CSV作成まで」や「失敗」の行は、まだ入稿していないので確かめる）
 function qmatePlanIsDone_(result) {
-  return !!result && result.indexOf('失敗') !== 0;
+  return !!result && result.indexOf('入稿済み') === 0;
 }
 
 // 確認の文言（画面を触らない部分。Node でもテストできるように分けてある）

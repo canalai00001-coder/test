@@ -4,6 +4,7 @@
   - 入稿：入稿予定表と取り下げ予定表の行を見て、今日の行（または選んだ1行）を実行する
   - 取り下げ：会社・作成日の期間・メモを指定して、Q-mate の原稿を取り下げる
   - 更新：GitHub に新しい版があるかを確かめ、ボタン1つで最新にする（ダウンロードした ZIP からも更新できる）
+  - テスト結果：入稿予定表の行を入稿しないで作った原稿の指摘を見て、その場で書き直し、そのまま入稿する
   - 比較：GAS で作った出力シートと、同じ予約内容でツールが作った原稿を見比べる（生成をツールに切り替える前の確認）
   - 原稿の作り方：通勤・入寮それぞれ、原稿を GAS で作るかツールで作るかを切り替える（settings.local.json に保存）
   - 会社：会社ごとの Q-mate のログイン情報を登録する（パスワードは Windows の資格情報マネージャーに保存）
@@ -314,6 +315,12 @@ def make_handler(app: App):
                     return self._send(200, app.update_info())
                 if u.path == "/api/accounts":
                     return self._send(200, app.accounts())
+                if u.path == "/api/previews":
+                    from . import preview
+                    return self._send(200, preview.listing())
+                if u.path == "/api/preview":
+                    from . import preview
+                    return self._send(200, preview.detail(q.get("name", [""])[0], q.get("all", ["0"])[0] != "1"))
                 if u.path == "/api/outputs":
                     return self._send(200, app.outputs())
             except Exception as e:
@@ -345,6 +352,20 @@ def make_handler(app: App):
                         return self._send(200, app.run("ログインの確認：全社", ["login-test", "--all"]))
                     return self._send(200, app.run(f"ログインの確認：{body['company']}",
                                                    ["login-test", "--company", body["company"]]))
+                if u.path == "/api/preview/run":
+                    return self._send(200, app.run(f"テスト：入稿予定表 {int(body['row'])}行目",
+                                                   ["preview", "--row", str(int(body["row"]))]))
+                if u.path == "/api/preview/edit":
+                    from . import preview
+                    if app.job and app.job.code is None:
+                        raise RuntimeError(f"「{app.job.title}」を実行中です。終わってから直してください")
+                    preview.edit(body["name"], int(body["row"]), body["column"], body.get("value", ""))
+                    return self._send(200, preview.detail(body["name"], not body.get("all")))
+                if u.path == "/api/preview/upload":
+                    from . import preview
+                    preview.meta(body["name"])  # 名前を確かめる
+                    return self._send(200, app.run(f"テスト結果から入稿：{body['name']}",
+                                                   ["upload-preview", "--name", body["name"]]))
                 if u.path == "/api/salary_sheet":
                     return self._send(200, app.run("給与設定シートの確認", ["salary-sheet"]))
                 if u.path == "/api/engine":
@@ -403,7 +424,7 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
 .status{font-size:13px;margin-bottom:8px}.empty{color:var(--sub);padding:12px 0}
 </style></head><body>
 <header><h1>Q-mate 入稿ツール</h1><span id="today"></span></header>
-<nav><button data-tab="post" class="on">入稿</button><button data-tab="takedown">取り下げ</button><button data-tab="compare">比較</button><button data-tab="accounts">会社</button><button data-tab="update">更新</button><button data-tab="check">設定の確認</button></nav>
+<nav><button data-tab="post" class="on">入稿</button><button data-tab="takedown">取り下げ</button><button data-tab="preview">テスト結果</button><button data-tab="compare">比較</button><button data-tab="accounts">会社</button><button data-tab="update">更新</button><button data-tab="check">設定の確認</button></nav>
 <main>
 <section id="post" class="on">
   <div class="card"><h2>入稿予定表</h2>
@@ -430,6 +451,17 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
     <div class="opts"><label><input type="checkbox" id="t_headed"> ブラウザを表示する</label></div>
     <div class="row"><button class="btn" id="t_dry">取り出しと件数の確認だけ（Q-mate は変えない）</button><button class="btn danger" id="t_run">取り下げる</button></div>
   </div>
+</section>
+<section id="preview">
+  <div class="card"><h2>テスト結果（入稿しないで作った原稿）</h2>
+    <p class="note">入稿タブの「テスト」で作った原稿です。入稿も使用履歴の記録もしていません。指摘のある項目はここで書き直せます（保存するとすぐチェックし直します）。
+      NG がなくなったら「この内容で入稿」で、書き直したとおりに入稿します。</p>
+    <div class="row"><button class="btn" onclick="loadPreviews()">一覧を読み直す</button></div>
+    <div id="pv_list"></div></div>
+  <div class="card" id="pv_card" style="display:none"><h2 id="pv_title"></h2><div id="pv_meta" class="status"></div>
+    <div class="row"><label><input type="checkbox" id="pv_all" onchange="openPreview(PV)"> 指摘のない行も出す</label>
+      <button class="btn primary" id="pv_upload">この内容で入稿</button></div>
+    <div id="pv_rows"></div></div>
 </section>
 <section id="compare">
   <div class="card"><h2>GAS とツールで作った原稿の比較</h2>
@@ -476,7 +508,22 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
 const T="__TOKEN__";const api=(p,o={})=>fetch(p+(p.includes("?")?"&":"?")+"t="+T,o).then(async r=>{const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j});
 const post=(p,b)=>api(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="compare")loadOutputs();if(b.dataset.tab==="accounts")loadAccounts()});
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="compare")loadOutputs();if(b.dataset.tab==="accounts")loadAccounts();if(b.dataset.tab==="preview")loadPreviews()});
+let PV="";
+const SEV={error:"NG",warning:"要確認",info:"参考"};
+async function loadPreviews(){pv_list.textContent="読み込んでいます…";try{const l=await api("/api/previews");pv_list.innerHTML=l.length?"<table><tr><th>行</th><th>会社</th><th>職種</th><th>通勤/入寮</th><th>件数</th><th>結果</th><th>作った日時</th><th>入稿</th><th></th></tr>"+l.map(p=>`<tr><td>${p.row}</td><td>${esc(p.company)}</td><td>${esc(p.category)}・${esc(p.night)}</td><td>${esc(p.commute)}</td><td>${p.count}</td><td class="${p.status==="NG"?"ng":""}">${esc(p.status)}（NG ${p.counts.NG||0}・要確認 ${p.counts["要確認"]||0}）</td><td>${esc(p.created_at.replace("T"," "))}</td><td>${p.uploaded_at?"入稿済み":""}</td><td><button class="btn" data-n="${esc(p.name)}" onclick="openPreview(this.dataset.n)">開く</button></td></tr>`).join("")+"</table>":'<div class="empty">まだテストしていません。入稿タブの各行の「テスト」を押してください</div>'}catch(e){pv_list.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+async function openPreview(n){if(!n)return;PV=n;try{showPreview(await api("/api/preview?name="+encodeURIComponent(n)+(pv_all.checked?"&all=1":"")))}catch(e){alert(e.message)}}
+function showPreview(d){const m=d.meta;pv_card.style.display="";pv_title.textContent=`${m.row}行目：${m.company}・${m.category}・${m.night}・${m.commute}`;
+ pv_meta.innerHTML=`全${d.total}件　<b class="${m.status==="NG"?"ng":""}">${esc(m.status)}</b>（NG ${m.counts.NG}件・要確認 ${m.counts["要確認"]}件・OK ${m.counts.OK}件）　応募先メール：${esc(m.company_info?m.company_info.email:"確かめられていません")}`+(m.uploaded_at?`<br><span class="ok">入稿済み：${esc(m.upload_result||"")}</span>`:"");
+ pv_upload.disabled=!!m.uploaded_at||m.status==="NG";pv_upload.title=m.status==="NG"?"NG の項目を直すと入稿できます":"";
+ pv_rows.innerHTML=d.rows.length?d.rows.map(r=>{const s=r.summary;const cols=Object.keys(r.values);
+  return `<div class="card"><b>${r.index+1}件目</b>　${esc(s["勤務地：都道府県"])}${esc(s["勤務地：市区町村"])}　${esc(s["職種名"])}　${esc(s["給与_下限"])}〜${esc(s["給与_上限"])}
+  <ul>${r.issues.map(i=>`<li class="${i.severity==="error"?"ng":""}">【${SEV[i.severity]||i.severity}】${esc(i.column)}：${esc(i.message)}</li>`).join("")}</ul>
+  ${cols.map(c=>`<div><label>${esc(c)}</label><textarea rows="${Math.min(12,Math.max(2,String(r.values[c]).split("\n").length+1))}" style="width:100%" data-row="${r.index}" data-col="${esc(c)}">${esc(r.values[c])}</textarea>
+   <button class="btn" onclick="saveCell(this.previousElementSibling)">保存してチェックし直す</button></div>`).join("")}</div>`}).join(""):'<div class="empty">指摘のある原稿はありません</div>'}
+async function saveCell(ta){try{showPreview(await post("/api/preview/edit",{name:PV,row:ta.dataset.row,column:ta.dataset.col,value:ta.value,all:pv_all.checked}))}catch(e){alert(e.message)}}
+pv_upload.onclick=()=>start("/api/preview/upload",{name:PV},"このテスト結果を、書き直した内容のまま Q-mate に入稿します。\n使用履歴と入稿予定表の実行結果もこのときに書きます。よろしいですか？");
+function testRow(row){start("/api/preview/run",{row})}
 function showAccounts(l){acc_list.innerHTML=l.length?"<table><tr><th>会社</th><th>ログイン ID</th><th>co</th><th>パスワード</th><th>登録先</th><th></th></tr>"+l.map(a=>`<tr><td>${esc(a.company)}</td><td>${esc(a.login_id)}</td><td>${esc(a.co)}</td><td>${a.password?'<span class="ok">保存済み</span>':'<span class="ng">なし</span>'}</td><td>${esc(a.source)}</td><td><button class="btn" data-c="${esc(a.company)}" onclick="start('/api/login_test',{company:this.dataset.c})">ログインを確かめる</button> ${a.source.startsWith("スプレッドシート")?"":`<button class="btn" data-c="${esc(a.company)}" data-l="${esc(a.login_id)}" data-co="${esc(a.co)}" onclick="editAccount(this.dataset)">変更</button>`}${a.source==="登録"?` <button class="btn danger" data-c="${esc(a.company)}" onclick="delAccount(this.dataset.c)">削除</button>`:""}</td></tr>`).join("")+"</table>":'<div class="empty">まだ登録されていません</div>'}
 async function loadAccounts(){acc_list.textContent="読み込んでいます…";try{showAccounts(await api("/api/accounts"))}catch(e){acc_list.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
 function editAccount(d){a_company.value=d.c;a_login.value=d.l;a_co.value=d.co;a_pw.value="";a_pw.focus()}
@@ -490,7 +537,7 @@ async function load(){plans.innerHTML=takedowns.innerHTML='<div class="empty">�
  try{const d=await api("/api/overview");today.textContent="今日："+d.today;showEngines(d.engines);
   t_company.innerHTML=d.companies.map(c=>`<option>${esc(c)}</option>`).join("");
   PLANS=d.plans;
-  plans.innerHTML=d.plans.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>職種</th><th>夜勤</th><th>通勤/入寮</th><th>ステータス</th><th>原稿数</th><th>職種名選択</th><th>職種名の確認</th><th>実行結果</th><th></th></tr>`+d.plans.map(p=>`<tr class="${p.today?"today":""}"><td>${p.row}</td><td>${esc(p.date)}</td><td>${esc(p.company)}</td><td>${esc(p.category)}</td><td>${p.night}</td><td>${esc(p.commute)}</td><td>${esc(p.status)}</td><td>${p.count}</td><td>${esc(p.title)}</td><td class="${p.check.startsWith("❌")?"ng":""}">${esc(p.check)}</td><td>${esc(p.result)}</td><td><button class="btn" onclick="runRow(${p.row},'${esc(p.status)}',${p.count})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
+  plans.innerHTML=d.plans.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>職種</th><th>夜勤</th><th>通勤/入寮</th><th>ステータス</th><th>原稿数</th><th>職種名選択</th><th>職種名の確認</th><th>実行結果</th><th></th></tr>`+d.plans.map(p=>`<tr class="${p.today?"today":""}"><td>${p.row}</td><td>${esc(p.date)}</td><td>${esc(p.company)}</td><td>${esc(p.category)}</td><td>${p.night}</td><td>${esc(p.commute)}</td><td>${esc(p.status)}</td><td>${p.count}</td><td>${esc(p.title)}</td><td class="${p.check.startsWith("❌")?"ng":""}">${esc(p.check)}</td><td>${esc(p.result)}</td><td><button class="btn" onclick="testRow(${p.row})">テスト</button> <button class="btn" onclick="runRow(${p.row},'${esc(p.status)}',${p.count})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
   takedowns.innerHTML=d.takedowns.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>作成日から</th><th>作成日まで</th><th>メモ</th><th>ステータス</th><th>実行結果</th><th></th></tr>`+d.takedowns.map(r=>`<tr class="${r.today?"today":""}"><td>${r.row}</td><td>${esc(r.date)}</td><td>${esc(r.company)}</td><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td>${esc(r.memo)}</td><td>${esc(r.status)}</td><td>${esc(r.result)}</td><td><button class="btn danger" onclick="runTdRow(${r.row})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
  }catch(e){plans.innerHTML=`<div class="ng">読み込めませんでした：${esc(e.message)}</div>`;takedowns.innerHTML=""}}
 async function start(p,b,msg){if(msg&&!confirm(msg))return;try{await post(p,b);since=0;log.textContent="";poll()}catch(e){alert(e.message)}}

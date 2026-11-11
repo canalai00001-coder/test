@@ -196,6 +196,7 @@ class TestScheduleCommand(unittest.TestCase):
         self.assertEqual(u.call_args.args[0].sheet, "出力_G予定3")
         self.assertEqual(set(books), {TARGETS["通勤"]["spreadsheet_id"]})
         self.assertIn("入稿済み", book.results[3])
+
         # 同じ行は2回実行しない
         book2 = FakeBook("✅完了 → 出力_G予定3")
         self.assertEqual(self.run_schedule(book2)[0], 0)
@@ -303,6 +304,22 @@ class TestScheduleCommand(unittest.TestCase):
         self.assertEqual(len(ms.rows), 2)
         self.assertIs(u.call_args.args[0].manuscript, ms)
         self.assertIn("入稿済み", book.results[3])
+
+    def test_dry_run_does_not_record_usage(self):
+        # 入稿しないテストで使用履歴を書くと、試した職種名が30日使えなくなる
+        from qmate_agent import generator
+        from qmate_agent.qmate_headers import QMATE_HEADERS
+        self.engine = "python"
+        seen = {}
+
+        def fake_run(settings, target, req, **kw):
+            seen["kw"] = kw
+            return generator.Result([{h: "" for h in QMATE_HEADERS}], {"x": 1}, [])
+        book = FakeBook("")
+        with mock.patch.object(generator, "run", fake_run):
+            self.run_schedule(book, dry_run=True)
+        self.assertFalse(seen["kw"]["record_usage"])
+        self.assertTrue(book.results[3].startswith("テスト："))
 
     def test_python_engine_error_is_recorded(self):
         from qmate_agent import generator

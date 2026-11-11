@@ -343,10 +343,12 @@ def cmd_schedule(args) -> int:
         print(f"\n=== 入稿予定表 {p.row}行目（{c}） ===")
         try:
             if t.get("engine") == "python":
-                manuscripts = [_generate_locally(p, c, t, settings, rules, today, run_id, args)]
+                # 入稿しないとき（テスト）は使用履歴を書かない（書くと、試した職種名が30日使えなくなる）
+                manuscripts = [_generate_locally(p, c, t, settings, rules, today, run_id, args,
+                                                 record_usage=not args.dry_run)]
                 sheets = [m.name for m in manuscripts]
                 _check_and_upload(manuscripts, p, t, settings, args, takedown_companies, takedown_done)
-                result = f"{'CSV作成まで' if args.dry_run else '入稿済み'}（{datetime.now():%m/%d %H:%M}）{', '.join(sheets)}"
+                result = f"{'テスト：CSV作成まで' if args.dry_run else '入稿済み'}（{datetime.now():%m/%d %H:%M}）{', '.join(sheets)}"
                 if not args.dry_run:
                     done[p.key] = {"sheets": sheets, "finished_at": datetime.now().isoformat(timespec="seconds")}
                     _save_state("schedule.json", done)
@@ -416,9 +418,12 @@ def _generate_locally(p, c, t, settings, rules, today, run_id, args, record_usag
     name = f"出力_G予定{p.row}_{run_id}_{p.company}_{p.category}_{today:%Y%m%d}"
     table = [QMATE_HEADERS] + [[r[h] for h in QMATE_HEADERS] for r in result.rows]
     print(f"生成しました: {name}（{len(result.rows)}件）")
-    if t.get("write_output_sheet"):
+    if t.get("write_output_sheet") and record_usage:
         _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"])).write_output_sheet(name, table)
-    return Manuscript(name, table)
+    ms = Manuscript(name, table)
+    ms.title_counts = result.title_counts  # 使用履歴に書く職種名と件数（テストから入稿するときに使う）
+    ms.category = req.category
+    return ms
 
 
 def _salary_rules(settings: dict, rules: dict, create: bool = True) -> list[dict]:
@@ -450,6 +455,107 @@ def _salary_rule(settings: dict, rules: dict, c: str, p, req):
     else:
         print(f"給与: 給与設定シートに当てはまる行がないため、これまでどおり（{req.salary_pattern or '時給シート'}）で作ります")
     return found
+
+
+def _plan_row(settings: dict, row: int):
+    from . import schedule as sc
+
+    plans = sc.read_plan(_spreadsheet(settings).plan_table(), date.today())
+    return next((p for p in plans if p.row == row), None)
+
+
+def cmd_preview(args) -> int:
+    """入稿予定表の1行を、入稿も使用履歴の記録もしないで作ってチェックし、テスト結果として残す。"""
+    from . import preview, schedule as sc
+
+    settings, rules = config.load("settings.json"), config.load("rules.json")
+    p = _plan_row(settings, args.row)
+    if p is None:
+        print(f"入稿予定表に {args.row}行目の予約がありません")
+        return 1
+    try:
+        c = sc.commute_of(p, settings.get("schedule_default_commute", "通勤"))
+    except ValueError as e:
+        print(e)
+        return 1
+    t = settings["schedule_targets"][c]
+    if t.get("engine") != "python":
+        print(f"{c}は GAS で原稿を作る設定のため、テストはできません（入稿タブで「ツールで作る」に切り替えてください）")
+        return 1
+    print(f"入稿予定表 {p.row}行目をテストします（入稿・使用履歴の記録・実行結果の書き込みはしません）")
+    print(f"  {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / {c} / {p.count}件 / "
+          f"ステータス {p.status or t.get('defaults', {}).get('ステータス')}")
+    today, run_id = date.today(), datetime.now().strftime("%H%M")
+    opts = SimpleNamespace(status=None, count=None, dry_run=True)
+    try:
+        ms = _generate_locally(p, c, t, settings, rules, today, run_id, opts, record_usage=False)
+    except Exception as e:
+        print(f"作れませんでした: {e}")
+        return 2
+    info, problem = None, ""
+    try:
+        info = _company_info(settings, SimpleNamespace(company=p.company, base_spreadsheet_id=t.get("base_spreadsheet_id")))
+        print(f"応募先メールの確認: {info['name']} → {info['email'] or '（会社情報に無し）'}")
+    except Exception as e:
+        problem = f"会社情報を読めず、応募先メールを確かめられません: {e}"
+        print(problem)
+    meta = {"row": p.row, "plan_key": p.key, "company": p.company, "category": p.category, "commute": c,
+            "night": "夜勤あり" if p.night else "夜勤なし", "count": len(ms.rows), "company_info": info,
+            "title_counts": getattr(ms, "title_counts", {}), "usage_category": getattr(ms, "category", p.category)}
+    name = preview.save(meta, ms)
+    m = preview.meta(name)
+    n = m["counts"]
+    print(f"\nテスト結果: {m['status']}（NG {n['NG']}件・要確認 {n['要確認']}件・OK {n['OK']}件 / 全{len(ms.rows)}件）")
+    if problem:
+        print("※ 応募先メールを確かめられていないため、このままでは入稿できません")
+    print(f"操作画面の「テスト結果」タブで中身を見て、直してから入稿できます（{name}）")
+    return 0 if m["status"] != "NG" else 2
+
+
+def cmd_upload_preview(args) -> int:
+    """テスト結果（書き直したもの）を、そのまま入稿する。使用履歴と入稿予定表の実行結果もここで書く。"""
+    from . import generator, preview
+
+    settings, rules = config.load("settings.json"), config.load("rules.json")
+    m = preview.meta(args.name)
+    if m.get("uploaded_at"):
+        print(f"このテスト結果は {m['uploaded_at']} に入稿済みです")
+        return 1
+    p = _plan_row(settings, m["row"])
+    if p is None or p.key != m["plan_key"]:
+        print(f"テストのあとで入稿予定表の {m['row']}行目が変わっています。もう一度テストしてから入稿してください")
+        return 1
+    done = _state("schedule.json")
+    if p.key in done:
+        print(f"入稿予定表 {p.row}行目は {done[p.key]['finished_at']} に入稿済みです")
+        return 1
+    t = settings["schedule_targets"][m["commute"]]
+    ms = preview.manuscript(args.name)
+    print(f"テスト結果 {args.name} を入稿します（{m['company']} / {m['category']} / {len(ms.rows)}件）")
+    print(f"\n--- チェック: {ms.name} ---")
+    if cmd_check(SimpleNamespace(sheet=ms.name, csv=None, no_ai=not settings.get("require_ai_check"), one_segment=True,
+                                 spreadsheet_id=t["spreadsheet_id"], manuscript=ms, company=m["company"],
+                                 base_spreadsheet_id=t.get("base_spreadsheet_id"))) == 2:
+        print("チェック結果が NG のため入稿しません。テスト結果タブで直してください")
+        return 2
+    print(f"\n--- 入稿: {ms.name} ---")
+    if cmd_upload(SimpleNamespace(sheet=ms.name, dry_run=False, headed=getattr(args, "headed", False), yes=True,
+                                  company=m["company"], spreadsheet_id=t["spreadsheet_id"], manuscript=ms)) != 0:
+        print("入稿に失敗しました")
+        return 2
+    if m.get("title_counts"):
+        base = _spreadsheet(dict(settings, spreadsheet_id=t["base_spreadsheet_id"]))
+        usage = base.usage_rows(generator.USAGE_SHEET)
+        base.write_usage(generator.USAGE_SHEET, generator.update_usage(
+            usage, m["company"], m["usage_category"], m["title_counts"], datetime.now()))
+        print("使用履歴に書きました: " + "、".join(m["title_counts"]))
+    text = f"入稿済み（{datetime.now():%m/%d %H:%M}・テストから）{ms.name}"
+    _spreadsheet(settings).write_plan_result(p.row, text)
+    done[p.key] = {"sheets": [ms.name], "finished_at": datetime.now().isoformat(timespec="seconds")}
+    _save_state("schedule.json", done)
+    preview.mark_uploaded(args.name, text)
+    print(text)
+    return 0
 
 
 def cmd_salary_sheet(args) -> int:
@@ -676,6 +782,15 @@ def main(argv=None) -> int:
     cp.add_argument("--gas-sheet", required=True, help="GAS が作った出力シートの名前")
     cp.add_argument("--commute", help="通勤 か 入寮（どちらのスプレッドシートの出力か。省略時は自動で探す）")
     cp.set_defaults(func=cmd_compare)
+
+    pv = sub.add_parser("preview", help="入稿予定表の1行を、入稿しないで作ってチェックする（テスト）")
+    pv.add_argument("--row", type=int, required=True, help="入稿予定表の行番号")
+    pv.set_defaults(func=cmd_preview)
+
+    up = sub.add_parser("upload-preview", help="テスト結果（書き直したもの）をそのまま入稿する")
+    up.add_argument("--name", required=True, help="テスト結果の名前（例：3行目_20261111_101500）")
+    up.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
+    up.set_defaults(func=cmd_upload_preview)
 
     ss = sub.add_parser("salary-sheet", help="給与設定シートを作る（無ければ）・中身を確かめる")
     ss.set_defaults(func=cmd_salary_sheet)
