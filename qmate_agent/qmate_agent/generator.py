@@ -496,6 +496,7 @@ class Request:
     box_word: str = ""     # 求人ボックスワード（重複対策ワード）
     title_choice: str = "" # 6重め/7軽めの職種名選択
     created: date | None = None
+    salary_rule: dict | None = None  # 給与設定シートの行（salary.parse の1件）。あれば給与パターンより優先
 
 
 @dataclass
@@ -650,7 +651,10 @@ class Generator:
 
         man = re.fullmatch(r"(\d+)\s*万", req.salary_pattern or "")
         offsets, salary_pool = None, []
-        if man:
+        from_rule = self.rule_salaries(req.salary_rule, target) if req.salary_rule else None
+        if from_rule:
+            pass
+        elif man:
             base = int(man.group(1))
             offsets = self.shuffle(range(10000))[:min(target or 10000, 10000)]
         else:
@@ -671,7 +675,9 @@ class Generator:
                 loc = self.next_location(req.company, locations, seg_used)
                 content = contents[int(self.rng.random() * len(contents))]
                 image = self.pick(images) if images else ""
-                if offsets is not None:
+                if from_rule:
+                    salary = from_rule()
+                elif offsets is not None:
                     lower = base * 10000 + offsets[offset_idx % len(offsets)]
                     offset_idx += 1
                     upper = js_round(lower * 1.25)
@@ -750,6 +756,10 @@ class Generator:
         if qk:
             row["応募資格・条件|必須"] = self.pick(bank.parts[qk])
         set_empty("性別制限|必須", "なし")
+        if salary and salary.get("hourly"):
+            row["給与形態|必須"] = "時給"
+        elif salary and salary.get("monthly"):
+            row["給与形態|必須"] = "月給"
         set_empty("給与形態|必須", "月給")
         set_empty("給与金額表示形式", "範囲表記")
         if salary:
@@ -790,11 +800,40 @@ class Generator:
                 pass
         return row
 
+    # ---- 給与設定シートの金額帯 ----
+    def rule_salaries(self, rule: dict, target: int):
+        """給与設定シートの1行から、原稿1件ずつの給与を返す関数を作る。
+
+        幅があれば、下限は 給与_下限〜給与_下限＋幅−1 から重ならないように選ぶ（GAS の「○○万」と同じ作り方）。
+        上限は 給与_上限 が空欄なら下限×1.25、入っていれば 給与_上限 に下限と同じばらつきを足す。
+        """
+        width = rule.get("width") or 0
+        offsets = self.shuffle(range(width))[:min(target or width, width)] if width else [0]
+        hourly = rule.get("form") == "時給"
+        state = {"i": 0}
+
+        def nxt() -> dict:
+            off = offsets[state["i"] % len(offsets)]
+            state["i"] += 1
+            lower = rule["lower"] + off
+            upper = rule["upper"] + off if rule.get("upper") else js_round(lower * 1.25)
+            if hourly:
+                ml, mu = lower * HOURS_PER_DAY * DAYS_PER_MONTH, upper * HOURS_PER_DAY * DAYS_PER_MONTH
+                detail = (f"〈時給〉{lower}円〜{upper}円\n{self.pick(MONTHLY_EXAMPLE_LABELS)}{ml:,}円〜{mu:,}円"
+                          f"(1日{HOURS_PER_DAY}時間×月{DAYS_PER_MONTH}日勤務の場合)")
+            else:
+                detail = (_fill(self.pick(self.bank.salary_detail_templates), [str(lower), str(upper)])
+                          if self.bank.salary_detail_templates else f"月給{lower:,}円〜{upper:,}円")
+            return {"lower": str(lower), "upper": str(upper), "detail": detail,
+                    "hourly": hourly, "monthly": not hourly}
+        return nxt
+
     # ---- 入寮用（入寮用 GAS の generateBatch_・buildRow_） ----
     def generate_dorm(self, req, cat, titles, contents, letter, company, locations, target, images,
                       standby_index, title_start, warnings) -> Result:
         bank = self.bank
         salary_pool = bank.salary_patterns.get(req.salary_pattern) or []
+        from_rule = self.rule_salaries(req.salary_rule, target) if req.salary_rule else None
         pool = (bank.standby_titles or bank.standby_keywords.get(cat) or STANDBY_KEYWORDS_BY_CATEGORY.get(cat)
                 or STANDBY_KEYWORDS_FALLBACK)
         standby = req.standby_keyword or (pool[standby_index] if standby_index < len(pool) else self.pick(pool))
@@ -809,7 +848,9 @@ class Generator:
                     break
                 content = contents[int(self.rng.random() * len(contents))]
                 image = self.pick(images) if images else ""
-                if bank.hourly:
+                if from_rule:
+                    salary = from_rule()
+                elif bank.hourly:
                     h = self.pick(bank.hourly)
                     line = h["template"] or f"〈時給〉{h['lower']}円〜{h['upper']}円"
                     label = self.pick(MONTHLY_EXAMPLE_LABELS)
@@ -868,6 +909,8 @@ class Generator:
         set_empty("性別制限|必須", "なし")
         if salary and salary.get("hourly"):
             row["給与形態|必須"] = "時給"
+        elif salary and salary.get("monthly"):
+            row["給与形態|必須"] = "月給"
         else:
             set_empty("給与形態|必須", "月給")
         set_empty("給与金額表示形式", "範囲表記")

@@ -345,6 +345,8 @@ def make_handler(app: App):
                         return self._send(200, app.run("ログインの確認：全社", ["login-test", "--all"]))
                     return self._send(200, app.run(f"ログインの確認：{body['company']}",
                                                    ["login-test", "--company", body["company"]]))
+                if u.path == "/api/salary_sheet":
+                    return self._send(200, app.run("給与設定シートの確認", ["salary-sheet"]))
                 if u.path == "/api/engine":
                     return self._send(200, app.set_engine(body))
                 if u.path == "/api/update/github":
@@ -462,7 +464,11 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
     <p class="note">settings.local.json・service_account.json・.venv・実行記録（state）・出力（output）は上書きしません。更新が終わったら、黒い画面と操作画面を閉じて app.bat を開き直してください。</p>
     <div id="u_result" class="status"></div></div>
 </section>
-<section id="check"><div class="card"><h2>設定の確認</h2><div id="checks"></div>
+<section id="check"><div class="card"><h2>給与設定</h2>
+  <p class="note">入稿予定表と同じスプレッドシートの「給与設定」シートで、職種・夜勤・会社ごとの給与の金額帯を決めます。
+    シートが無ければ、今の給与下限の表を書き込んで作ります。押すと、シートの中身とどう使われるかが下の「実行の記録」に出ます。</p>
+  <div class="row"><button class="btn" onclick="start('/api/salary_sheet',{})">給与設定シートを作る・確かめる</button></div></div>
+  <div class="card"><h2>設定の確認</h2><div id="checks"></div>
   <p class="note">setx で登録したものは、登録したあとに app.bat を開き直すと反映されます。</p></div></section>
 <div class="card"><h2 id="job_title">実行の記録</h2><div id="job_state" class="status"></div><pre id="log"></pre></div>
 </main>

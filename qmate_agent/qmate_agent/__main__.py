@@ -407,6 +407,7 @@ def _generate_locally(p, c, t, settings, rules, today, run_id, args, record_usag
         salary_pattern=v["給与パターン"], night=v["夜勤の有無"], standby_keyword=v["スタンバイキーワード"],
         title_measure=v.get("タイトル(施策)", ""), box_word=v["求人ボックスワード"], title_choice=v["職種名選択"],
         created=today)
+    req.salary_rule = _salary_rule(settings, rules, c, p, req)
     print(f"ツールで原稿を生成します（{c}用の土台を使用）")
     result = generator.run(settings, t, req, record_usage=record_usage, ignore_cooldown=ignore_cooldown,
                            dorm=c == "入寮")
@@ -418,6 +419,54 @@ def _generate_locally(p, c, t, settings, rules, today, run_id, args, record_usag
     if t.get("write_output_sheet"):
         _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"])).write_output_sheet(name, table)
     return Manuscript(name, table)
+
+
+def _salary_rules(settings: dict, rules: dict, create: bool = True) -> list[dict]:
+    """給与設定シート（入稿予定表と同じスプレッドシート）を読む。無ければ今の決め方で作る。"""
+    from . import salary
+
+    book = _spreadsheet(settings)
+    table = book.table_or_none(settings.get("salary_sheet", salary.SHEET))
+    if table is None and create:
+        table = [salary.HEADERS] + salary.default_rows(rules)
+        book.create_table_sheet(settings.get("salary_sheet", salary.SHEET), table, salary.NOTE)
+        print(f"「{salary.SHEET}」シートを作りました（今の給与下限の表を書き込んであります）")
+    return salary.parse(table or [])
+
+
+def _salary_rule(settings: dict, rules: dict, c: str, p, req):
+    """予約の行に当てはまる給与設定の行。無ければ None（これまでの給与パターンで作る）。"""
+    from . import salary
+
+    try:
+        found = salary.match(_salary_rules(settings, rules), c, p.category, p.night, p.company)
+    except ValueError:
+        raise
+    except Exception as e:
+        print(f"給与設定シートを読めませんでした（{e}）。これまでどおりの決め方で作ります")
+        return None
+    if found:
+        print(f"給与: {salary.describe(found)}")
+    else:
+        print(f"給与: 給与設定シートに当てはまる行がないため、これまでどおり（{req.salary_pattern or '時給シート'}）で作ります")
+    return found
+
+
+def cmd_salary_sheet(args) -> int:
+    """給与設定シートを作る（無ければ）・中身を確かめる。"""
+    from . import salary
+
+    settings, rules = config.load("settings.json"), config.load("rules.json")
+    try:
+        found = _salary_rules(settings, rules)
+    except ValueError as e:
+        print(f"給与設定シートに読めない値があります: {e}")
+        return 2
+    print(f"給与設定シート: {len(found)}行")
+    for r in found:
+        cond = " / ".join(x for x in (r["commute"], r["category"], r["night"], r["company"]) if x) or "すべて"
+        print(f"  {cond} → {salary.describe(r)}")
+    return 0
 
 
 def _check_and_upload(manuscripts, p, t, settings, args, takedown_companies, takedown_done) -> None:
@@ -627,6 +676,9 @@ def main(argv=None) -> int:
     cp.add_argument("--gas-sheet", required=True, help="GAS が作った出力シートの名前")
     cp.add_argument("--commute", help="通勤 か 入寮（どちらのスプレッドシートの出力か。省略時は自動で探す）")
     cp.set_defaults(func=cmd_compare)
+
+    ss = sub.add_parser("salary-sheet", help="給与設定シートを作る（無ければ）・中身を確かめる")
+    ss.set_defaults(func=cmd_salary_sheet)
 
     lt = sub.add_parser("login-test", help="会社のログイン情報で Q-mate にログインできるか確かめる")
     g = lt.add_mutually_exclusive_group(required=True)

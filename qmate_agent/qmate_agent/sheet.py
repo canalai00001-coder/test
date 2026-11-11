@@ -133,6 +133,28 @@ class Spreadsheet:
         if clean:
             ws.update(clean, "A2", value_input_option="RAW")
 
+    def table_or_none(self, sheet: str) -> list[list] | None:
+        """シートの値（書式を当てない値）。シートが無ければ None。"""
+        import gspread
+        from gspread.utils import ValueRenderOption
+
+        try:
+            ws = self.book.worksheet(sheet)
+        except gspread.WorksheetNotFound:
+            return None
+        return ws.get_all_values(value_render_option=ValueRenderOption.unformatted)
+
+    def create_table_sheet(self, sheet: str, rows: list[list], note: list[list] | None = None) -> None:
+        """見出し＋行のシートを作る（給与設定シートなど）。note は右側に書く説明。"""
+        width = max(len(r) for r in rows)
+        ws = self.book.add_worksheet(sheet, rows=max(len(rows) + 50, 100), cols=width + 3)
+        ws.update(rows, "A1", value_input_option="RAW")
+        if note:
+            from gspread.utils import rowcol_to_a1
+            ws.update(note, rowcol_to_a1(1, width + 2), value_input_option="RAW")
+        ws.freeze(rows=1)
+        ws.format(f"A1:{chr(ord('A') + width - 1)}1", {"textFormat": {"bold": True}})
+
     def write_output_sheet(self, name: str, table: list[list]) -> None:
         """生成した原稿を「出力_…」シートとしても残す（GAS で作ったときと同じ見た目にしたいとき）。"""
         ws = self.book.add_worksheet(name, rows=len(table) + 1, cols=len(table[0]))
