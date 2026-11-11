@@ -103,3 +103,27 @@ class TestCommands(Base):
                 mock.patch.object(cli, "cmd_upload") as up:
             self.assertEqual(cli.cmd_upload_preview(SimpleNamespace(name=name)), 1)
         up.assert_not_called()
+
+
+class TestTodayBatch(Base):
+    def test_only_today_and_not_done(self):
+        from datetime import date
+        today = date.today()
+        plans = [SimpleNamespace(row=r, key=f"K{r}", run_date=d) for r, d in
+                 ((2, today), (3, today), (4, today), (5, date(2020, 1, 1)))]
+        cli._save_state("schedule.json", {"K3": {"finished_at": "x"}})   # 3行目はツールで入稿済み
+        book = SimpleNamespace(plan_table=lambda *a: [["実行結果"]])
+        seen = []
+        with mock.patch.object(cli, "_spreadsheet", return_value=book), \
+                mock.patch("qmate_agent.schedule.read_plan", return_value=plans), \
+                mock.patch.object(cli, "_plan_results", return_value={4: "入稿済み（11/10 10:00）"}), \
+                mock.patch.object(cli, "_preview_one", side_effect=lambda s, r, p: seen.append(p.row) or 0):
+            self.assertEqual(cli.cmd_preview(SimpleNamespace(today=True, row=None)), 0)
+        self.assertEqual(seen, [2])
+
+    def test_is_done(self):
+        self.assertTrue(cli.is_done("K", "", {"K": {}}))
+        self.assertTrue(cli.is_done("X", "入稿済み（11/10）", {}))
+        self.assertTrue(cli.is_done("X", "取り下げ済み（11/10）", {}))
+        self.assertFalse(cli.is_done("X", "テスト：CSV作成まで（11/10）", {}))
+        self.assertFalse(cli.is_done("X", "失敗（11/10）", {}))

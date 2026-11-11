@@ -464,15 +464,65 @@ def _plan_row(settings: dict, row: int):
     return next((p for p in plans if p.row == row), None)
 
 
+def _plan_results(settings: dict) -> dict:
+    """入稿予定表の {行番号: 実行結果}。"""
+    table = _spreadsheet(settings).plan_table()
+    if not table:
+        return {}
+    head = [str(h).strip() for h in table[0]]
+    if "実行結果" not in head:
+        return {}
+    c = head.index("実行結果")
+    return {i: str(r[c]).strip() for i, r in enumerate(table[1:], start=2) if c < len(r) and str(r[c]).strip()}
+
+
+def is_done(key: str, result: str, done: dict) -> bool:
+    """入稿済みの予約か（ツールの実行記録にあるか、実行結果が「入稿済み」で始まる）。"""
+    return key in done or (result or "").startswith(("入稿済み", "取り下げ済み"))
+
+
 def cmd_preview(args) -> int:
-    """入稿予定表の1行を、入稿も使用履歴の記録もしないで作ってチェックし、テスト結果として残す。"""
-    from . import preview, schedule as sc
+    """入稿予定表の行を、入稿も使用履歴の記録もしないで作ってチェックし、テスト結果として残す。
+
+    --row なら1行、--today なら今日の行のうち入稿済みでないものをすべて。
+    """
+    from . import schedule as sc
 
     settings, rules = config.load("settings.json"), config.load("rules.json")
-    p = _plan_row(settings, args.row)
-    if p is None:
-        print(f"入稿予定表に {args.row}行目の予約がありません")
-        return 1
+    if not getattr(args, "today", False):
+        p = _plan_row(settings, args.row)
+        if p is None:
+            print(f"入稿予定表に {args.row}行目の予約がありません")
+            return 1
+        return _preview_one(settings, rules, p)
+    today = date.today()
+    done, results = _state("schedule.json"), _plan_results(settings)
+    plans = [p for p in sc.read_plan(_spreadsheet(settings).plan_table(), today) if p.run_date == today]
+    skipped = [p for p in plans if is_done(p.key, results.get(p.row, ""), done)]
+    targets = [p for p in plans if p not in skipped]
+    if skipped:
+        print(f"入稿済みの行はテストしません: {'、'.join(f'{p.row}行目' for p in skipped)}")
+    if not targets:
+        print(f"今日（{today:%Y/%m/%d}）の行で、テストする行がありません")
+        return 0
+    print(f"今日の行 {len(targets)}件 をテストします（入稿・使用履歴の記録・実行結果の書き込みはしません）")
+    codes = {}
+    for p in targets:
+        print(f"\n=== 入稿予定表 {p.row}行目 ===")
+        try:
+            codes[p.row] = _preview_one(settings, rules, p)
+        except Exception as e:
+            print(f"テストできませんでした: {e}")
+            codes[p.row] = 2
+    print("\n--- まとめ ---")
+    for row, code in codes.items():
+        print(f"  {row}行目: {'OK・要確認（入稿できます）' if code == 0 else 'NG か作れませんでした（テスト結果タブ・上の記録を確かめてください）'}")
+    return 0 if all(c == 0 for c in codes.values()) else 2
+
+
+def _preview_one(settings: dict, rules: dict, p) -> int:
+    from . import preview, schedule as sc
+
     try:
         c = sc.commute_of(p, settings.get("schedule_default_commute", "通勤"))
     except ValueError as e:
@@ -784,7 +834,9 @@ def main(argv=None) -> int:
     cp.set_defaults(func=cmd_compare)
 
     pv = sub.add_parser("preview", help="入稿予定表の1行を、入稿しないで作ってチェックする（テスト）")
-    pv.add_argument("--row", type=int, required=True, help="入稿予定表の行番号")
+    g = pv.add_mutually_exclusive_group(required=True)
+    g.add_argument("--row", type=int, help="入稿予定表の行番号")
+    g.add_argument("--today", action="store_true", help="今日の行のうち、入稿済みでないものをすべて")
     pv.set_defaults(func=cmd_preview)
 
     up = sub.add_parser("upload-preview", help="テスト結果（書き直したもの）をそのまま入稿する")
