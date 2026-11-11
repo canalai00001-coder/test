@@ -310,3 +310,11 @@ class TestSheetErrorsInBase(unittest.TestCase):
         b = g.load_bank(sheets, {"クルマ"})
         self.assertEqual(b.parts["休日休暇"], ["休日1"])
         self.assertEqual(b.error_cells, {"応募資格・勤務時間・休日・キャッチコピー・待遇": 1})
+
+
+class TestCompanyOnlySheetsAreSkipped(unittest.TestCase):
+    def test_bracket_sheet_is_not_read(self):
+        sheets = base_sheets() + [("【ArK_製造】応募資格・勤務時間・休日・キャッチコピー・待遇",
+                                   lambda: (_ for _ in ()).throw(AssertionError("会社専用のシートは読まない")))]
+        b = g.load_bank(sheets, {"クルマ"})
+        self.assertEqual(b.parts["休日休暇"], ["休日1", "休日2"])
