@@ -289,7 +289,7 @@ function qmatePlanCheckText_(row, titles, used, now, taken) {
   if (!row.company && !row.category) return '';
   if (qmatePlanIsDone_(row.result)) return '';
   const m = row.category.match(/^\d+(重め|軽め)$/);
-  if (!m) return row.category ? '✅ 職種名は自動で選びます（30日以内に使ったものは選びません）' : '';
+  if (!m) return row.category ? '✅ 職種名は自動で選びます（30日以内に使ったものは避け、無くなったら前に使ったものを使い回します）' : '';
   if (!row.title || row.title === QMATE_PLAN_NONE) return '❌ 職種名選択を選んでください';
   const title = qmatePlanBareTitle_(row.title);
   if (titles && titles.indexOf(title) < 0) {

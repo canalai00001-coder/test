@@ -318,3 +318,22 @@ class TestCompanyOnlySheetsAreSkipped(unittest.TestCase):
                                    lambda: (_ for _ in ()).throw(AssertionError("会社専用のシートは読まない")))]
         b = g.load_bank(sheets, {"クルマ"})
         self.assertEqual(b.parts["休日休暇"], ["休日1", "休日2"])
+
+
+class TestReuseWhenAllTitlesUsed(unittest.TestCase):
+    def test_oldest_title_is_used_again(self):
+        # 1クルマの職種名2つを、どちらも30日以内に使っている
+        usage = [["AspiRove株式会社", "1クルマ", "くるまの製造スタッフ", 1, 10, "2026-11-01 10:00", 10, 10],
+                 ["AspiRove株式会社", "1クルマ", "車関係の製造作業スタッフ", 1, 10, "2026-10-20 10:00", 10, 10]]
+        gen = g.Generator(bank(), usage, rng=random.Random(1), now=NOW)
+        res = gen.generate(g.Request(category="1クルマ", company="AspiRove株式会社", count=2, night="夜勤あり",
+                                     salary_pattern="基本"))
+        self.assertEqual(list(res.title_counts), ["車関係の製造作業スタッフ"])  # いちばん前に使ったもの
+        self.assertTrue(any("使い回します" in w for w in res.warnings))
+
+    def test_paired_still_refuses(self):
+        usage = [["AspiRove株式会社", "7軽め", "チョークの製造", 1, 10, "2026-11-01 10:00", 10, 10]]
+        gen = g.Generator(bank(), usage, rng=random.Random(1), now=NOW)
+        with self.assertRaisesRegex(ValueError, "重複警告"):
+            gen.generate(g.Request(category="7軽め", company="AspiRove株式会社", count=2, night="夜勤あり",
+                                   salary_pattern="基本", title_choice="7軽め｜チョークの製造"))

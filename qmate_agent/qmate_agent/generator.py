@@ -622,7 +622,12 @@ class Generator:
                 raise ValueError(f"カテゴリ「{cat}」の仕事内容が見つかりません")
             titles = [t for t in all_titles if t not in recent]
             if not titles:
-                raise ValueError(f"重複警告: カテゴリ「{req.category}」({req.company})は全職種名が使用履歴に存在しています。")
+                # 30日以内に全部使っていたら、止めずに、いちばん前に使った職種名から順に使い回す
+                uniq = list(dict.fromkeys(all_titles))
+                titles = sorted(uniq, key=lambda t: used.get(t, datetime.min))
+                first = titles[0]
+                warnings.append(f"⚠️カテゴリ「{req.category}」({req.company})は30日以内に全職種名を使っているため、"
+                                f"前に使ったものを使い回します（いちばん前に使ったもの：{first}・{used[first]:%m/%d}）")
 
         company = bank.companies.get(req.company)
         if not company:
