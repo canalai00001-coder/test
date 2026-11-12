@@ -90,3 +90,34 @@ class TestCreateSheet(unittest.TestCase):
             self.assertIn("給与設定", made)
             self.assertEqual(len(rules), 14)
             self.assertEqual(len(cli._salary_rules(config.load("settings.json"), RULES)), 14)
+
+
+class TestCheckUsesSalarySheet(unittest.TestCase):
+    """入稿前のチェックも給与設定シートの金額帯で見る（当てはまる行が無いときはマニュアルの給与下限）。"""
+
+    def row(self, lo, hi):
+        from tests.fixtures import clean_row
+        r = clean_row()
+        memo = r["メモ"].split("-")
+        memo[5], memo[6] = str(lo), str(hi)
+        return clean_row(給与_下限=str(lo), 給与_上限=str(hi), 基本給=str(lo), メモ="-".join(memo))
+
+    def errors(self, row, rule):
+        from qmate_agent.checks import Manuscript, check_sheet
+        from tests.fixtures import table
+        return [i for i in check_sheet(Manuscript("出力_t", table(row)), RULES, salary_rule=rule)[0]
+                if i.severity == "error" and i.column.startswith("給与")]
+
+    def test_band_below_manual_floor_is_ok_when_set_in_sheet(self):
+        rule = {"row": 3, "form": "月給", "lower": 300000, "upper": 340000, "width": 10000}
+        self.assertEqual(self.errors(self.row(305123, 345123), rule), [])
+        # 給与設定シートが無ければ、6重め・夜勤ありはマニュアルの 350,000 円を下回るので NG
+        self.assertTrue(self.errors(self.row(305123, 345123), None))
+
+    def test_outside_band_is_ng(self):
+        rule = {"row": 3, "form": "月給", "lower": 300000, "upper": 340000, "width": 10000}
+        self.assertIn("入っていません", self.errors(self.row(310000, 350000), rule)[0].message)
+        self.assertIn("340,000円 のはず", self.errors(self.row(300000, 341000), rule)[0].message)
+        times = {"row": 2, "form": "月給", "lower": 350000, "upper": None, "width": 10000}
+        self.assertEqual(self.errors(self.row(352000, 440000), times), [])
+        self.assertTrue(self.errors(self.row(352000, 450000), times))

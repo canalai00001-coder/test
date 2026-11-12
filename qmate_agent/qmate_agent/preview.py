@@ -51,8 +51,11 @@ def save(meta: dict, ms: Manuscript) -> str:
 
 
 def manuscript(name: str) -> Manuscript:
-    m = _read(_dir(name), "manuscript.json")
-    return Manuscript(m["name"], m["table"])
+    d = _dir(name)
+    m = _read(d, "manuscript.json")
+    ms = Manuscript(m["name"], m["table"])
+    ms.salary_rule = _read(d, "meta.json").get("salary_rule")  # 入稿前のチェックでも同じ金額帯で見る
+    return ms
 
 
 def meta(name: str) -> dict:
@@ -74,7 +77,7 @@ def recheck(name: str) -> dict:
     ms = manuscript(name)
     rules = config.load("rules.json")
     ms.fill_blanks(rules.get("blank_defaults", {}))
-    results = check_sheet(ms, rules, one_segment=True, company=m.get("company_info"))
+    results = check_sheet(ms, rules, one_segment=True, company=m.get("company_info"), salary_rule=m.get("salary_rule"))
     issues = [[i.to_dict() for i in r] for r in results]
     _write(d, "issues.json", issues)
     flat = [x for r in results for x in r]

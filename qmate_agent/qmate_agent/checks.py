@@ -131,7 +131,7 @@ def is_sheet_error(v) -> bool:
     return isinstance(v, str) and bool(SHEET_ERROR.search(v))
 
 
-def check_row(row: dict, headers: list[str], rules: dict) -> list[Issue]:
+def check_row(row: dict, headers: list[str], rules: dict, salary_rule: dict | None = None) -> list[Issue]:
     issues: list[Issue] = []
     add = lambda sev, col, msg: issues.append(Issue(sev, col, msg))
 
@@ -196,9 +196,12 @@ def check_row(row: dict, headers: list[str], rules: dict) -> list[Issue]:
         if email and nfkc(row.get("応募時メール送信先1")) != email:
             add("error", "応募時メール送信先1", f"{memo.company} の送信先は {email} です")
 
-    # 給与下限（マニュアル 2026.10.1～）
+    # 給与：給与設定シートの行で作った原稿は、その行の金額帯に入っているか。
+    # 当てはまる行が無かった原稿（と GAS で作った原稿）は、マニュアルの給与下限（rules.json）で見る
     night = night_shift(row)
-    if job and wage_type == "月給" and lo is not None:
+    if salary_rule is not None:
+        issues += check_salary_band(lo, hi, salary_rule)
+    elif job and wage_type == "月給" and lo is not None:
         floor = rules.get("salary_floor", {}).get(job, {})
         if night and night in floor and lo < floor[night]:
             add("error", "給与_下限", f"{job}・{night}の給与下限 {floor[night]:,} 円を下回っています（{lo:,}）")
@@ -240,17 +243,39 @@ def check_row(row: dict, headers: list[str], rules: dict) -> list[Issue]:
     return issues
 
 
-def check_sheet(ms: Manuscript, rules: dict, one_segment: bool = False, company: dict | None = None) -> list[list[Issue]]:
+def check_salary_band(lo, hi, rule: dict) -> list[Issue]:
+    """給与_下限・給与_上限が、給与設定シートの行（salary.parse の1件）で決めた金額帯の中か。"""
+    out = []
+    where = f"給与設定シート {rule.get('row', '?')}行目"
+    if lo is None or hi is None:
+        return out  # 数値でないことは上のチェックで NG にしている
+    width = rule.get("width") or 0
+    top = rule["lower"] + max(width - 1, 0)
+    if not rule["lower"] <= lo <= top:
+        band = f"{rule['lower']:,}〜{top:,}" if width else f"{rule['lower']:,}"
+        out.append(Issue("error", "給与_下限", f"{where}の下限（{band}円）に入っていません（{lo:,}）"))
+    elif rule.get("upper"):
+        want = rule["upper"] + (lo - rule["lower"])
+        if hi != want:
+            out.append(Issue("error", "給与_上限", f"{where}の上限は {want:,}円 のはずです（{hi:,}）"))
+    elif abs(hi - lo * 1.25) > 1:
+        out.append(Issue("error", "給与_上限", f"{where}の上限は下限×1.25（{lo * 1.25:,.0f}円）のはずです（{hi:,}）"))
+    return out
+
+
+def check_sheet(ms: Manuscript, rules: dict, one_segment: bool = False, company: dict | None = None,
+                salary_rule: dict | None = None) -> list[list[Issue]]:
     """行ごとの指摘のリストを返す（ms.rows と同じ順番）。
 
     company: 入稿先の会社（{"name", "email", "memo_name", "others"}。土台の会社情報シートから読み直したもの）。
     渡したときは、全行の応募時メール送信先1がこの会社のものか、メモの会社名がこの会社かを確かめる。
+    salary_rule: 給与を決めた給与設定シートの行。渡したときは、マニュアルの給与下限の代わりにその金額帯で確かめる。
 
     one_segment: シート全体が1つの予約行から作られている（schedule で作ったシート）。
     GAS の検品は予約行（1-1、1-2…）ごとに勤務地の重複を問題にするので、
     1つの予約行だけのシートなら、シート内の勤務地の重複をエラーにする。
     """
-    results = [check_row(r, ms.headers, rules) for r in ms.rows]
+    results = [check_row(r, ms.headers, rules, salary_rule) for r in ms.rows]
     if company is not None:
         for i, r in enumerate(ms.rows):
             results[i] += check_company(r, company)

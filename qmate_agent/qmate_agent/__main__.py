@@ -105,7 +105,9 @@ def cmd_check(args) -> int:
             print(f"応募先メールの確認: {company_info['name']} → {company_info['email'] or '（会社情報に無し）'}")
         except Exception as e:
             sheet_issues.append(Issue("error", "応募時メール送信先1", f"会社情報を読めず、応募先メールを確かめられません: {e}"))
-    results = check_sheet(ms, rules, one_segment=getattr(args, "one_segment", False), company=company_info)
+    salary_rule = getattr(local, "salary_rule", None) if local is not None else None
+    results = check_sheet(ms, rules, one_segment=getattr(args, "one_segment", False), company=company_info,
+                          salary_rule=salary_rule)
     summaries = [""] * len(ms.rows)
     if not args.no_ai:
         from .ai_review import AIReviewer
@@ -437,6 +439,7 @@ def _generate_locally(p, c, t, settings, rules, today, run_id, args, record_usag
         _spreadsheet(dict(settings, spreadsheet_id=t["spreadsheet_id"])).write_output_sheet(name, table)
     ms = Manuscript(name, table)
     ms.title_counts = result.title_counts  # 使用履歴に書く職種名と件数（テストから入稿するときに使う）
+    ms.salary_rule = req.salary_rule  # 給与を決めた給与設定シートの行（チェックでこの金額帯を見る）
     ms.category = req.category
     return ms
 
@@ -566,7 +569,8 @@ def _preview_one(settings: dict, rules: dict, p) -> int:
         print(problem)
     meta = {"row": p.row, "plan_key": p.key, "company": p.company, "category": p.category, "commute": c,
             "night": "夜勤あり" if p.night else "夜勤なし", "count": len(ms.rows), "company_info": info,
-            "title_counts": getattr(ms, "title_counts", {}), "usage_category": getattr(ms, "category", p.category)}
+            "title_counts": getattr(ms, "title_counts", {}), "usage_category": getattr(ms, "category", p.category),
+            "salary_rule": getattr(ms, "salary_rule", None)}
     name = preview.save(meta, ms)
     m = preview.meta(name)
     n = m["counts"]
