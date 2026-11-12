@@ -10,6 +10,23 @@ from .checks import Manuscript
 from .config import ROOT
 
 
+# 1回の実行のあいだ、土台など変わらないシートの値を使い回す（{(スプレッドシートID, シート名): 値}）。
+# 行ごとに土台を全部読み直すと、Google の「1分あたりの読み取り回数」の上限を超えるため
+_VALUES: dict = {}
+_TITLES: dict = {}
+
+
+def _client(filename: str):
+    import gspread
+
+    try:
+        # 「読み取り回数の上限」（429）などのときは、少し待ってから自動でやり直す
+        from gspread.http_client import BackOffHTTPClient
+        return gspread.service_account(filename=filename, http_client=BackOffHTTPClient)
+    except ImportError:
+        return gspread.service_account(filename=filename)
+
+
 class Spreadsheet:
     def __init__(self, settings: dict):
         self.settings = settings
@@ -20,8 +37,8 @@ class Spreadsheet:
         if self._book is None:
             import gspread
 
-            gc = gspread.service_account(filename=str(ROOT / self.settings["service_account_file"]))
-            self._book = gc.open_by_key(self.settings["spreadsheet_id"])
+            self._book = _client(str(ROOT / self.settings["service_account_file"])).open_by_key(
+                self.settings["spreadsheet_id"])
         return self._book
 
     def output_sheet_names(self) -> list[str]:
@@ -105,8 +122,16 @@ class Spreadsheet:
         """原稿の生成用：[(シート名, 値を読む関数)]。中身は必要になったときだけ読む（書式を当てない値）。"""
         from gspread.utils import ValueRenderOption
 
-        return [(ws.title, (lambda ws=ws: ws.get_all_values(value_render_option=ValueRenderOption.unformatted)))
-                for ws in self.book.worksheets()]
+        sid = self.settings["spreadsheet_id"]
+        if sid not in _TITLES:
+            _TITLES[sid] = self.book.worksheets()
+
+        def get(ws):
+            key = (sid, ws.title)
+            if key not in _VALUES:
+                _VALUES[key] = ws.get_all_values(value_render_option=ValueRenderOption.unformatted)
+            return _VALUES[key]
+        return [(ws.title, (lambda ws=ws: get(ws))) for ws in _TITLES[sid]]
 
     def usage_rows(self, sheet: str) -> list[list]:
         """使用履歴（見出しを除く）。シートが無ければ空。"""

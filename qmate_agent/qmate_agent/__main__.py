@@ -29,9 +29,24 @@ def _save_state(name: str, data: dict) -> None:
     (config.STATE_DIR / name).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+_BOOKS: dict = {}
+
+
 def _spreadsheet(settings):
+    """スプレッドシート（同じ ID は1回の実行のあいだ使い回す。開くたびに読み取り回数を使うため）。"""
     from .sheet import Spreadsheet
-    return Spreadsheet(settings)
+    key = (settings.get("spreadsheet_id"), settings.get("plan_sheet"))
+    if key not in _BOOKS:
+        _BOOKS[key] = Spreadsheet(settings)
+    return _BOOKS[key]
+
+
+def _write_result(book, row: int, text: str, sheet=None) -> None:
+    """入稿予定表・取り下げ予定表の実行結果を書く。書けなくても、ほかの行の実行は続ける。"""
+    try:
+        book.write_plan_result(row, text, sheet=sheet) if sheet else book.write_plan_result(row, text)
+    except Exception as e:
+        print(f"※ {row}行目の実行結果を予定表に書けませんでした（{e}）。結果：{text}")
 
 
 def _settings(args) -> dict:
@@ -335,7 +350,7 @@ def cmd_schedule(args) -> int:
                 done[r.key] = {"count": res["count"], "finished_at": datetime.now().isoformat(timespec="seconds")}
                 _save_state("schedule.json", done)
         print(text)
-        book.write_plan_result(r.row, text, sheet=td_sheet)
+        _write_result(book, r.row, text, sheet=td_sheet)
     for p in targets:
         c = commutes[p.row]
         t = gas_targets[c]
@@ -352,7 +367,7 @@ def cmd_schedule(args) -> int:
                 if not args.dry_run:
                     done[p.key] = {"sheets": sheets, "finished_at": datetime.now().isoformat(timespec="seconds")}
                     _save_state("schedule.json", done)
-                book.write_plan_result(p.row, result)
+                _write_result(book, p.row, result)
                 continue
             values = sc.config_row(p, c, t, rules, today, run_id, args.status, args.count)
             # GAS は実行状況が空欄の行をすべて生成するので、ほかの未実行の予約行があると一緒に作られてしまう
@@ -391,7 +406,7 @@ def cmd_schedule(args) -> int:
             failed += 1
             result = f"失敗（{datetime.now():%m/%d %H:%M}）{e}"
             print(result)
-        book.write_plan_result(p.row, result)
+        _write_result(book, p.row, result)
     print(f"\n完了: {len(targets) + len(td_targets) - failed}件 成功 / {failed}件 失敗")
     return 0 if not failed else 2
 
