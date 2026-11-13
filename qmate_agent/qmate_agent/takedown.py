@@ -35,6 +35,22 @@ def memo_filter(date_from: date | None, date_to: date | None, memo: str = "") ->
     return ""
 
 
+def memo_filters(date_from: date | None, date_to: date | None, memo: str = "") -> list[str]:
+    """テンプレート出力を何回に分けて、それぞれメモ欄に何を入れるか。
+
+    期間を指定したときは月ごとに「-2610」「-2611」のように Q-mate 側で絞る（会社の全原稿を一度に書き出すと、
+    件数が多い会社では Q-mate の出力が終わらないため）。期間の外の日は、取り出したあと row_filter で除く。
+    """
+    one = memo_filter(date_from, date_to, memo)
+    if one or not (date_from and date_to) or date_from > date_to:
+        return [one]
+    months, y, m = [], date_from.year, date_from.month
+    while (y, m) <= (date_to.year, date_to.month):
+        months.append(f"-{y % 100:02d}{m:02d}")
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return months if len(months) <= 6 else [""]
+
+
 def row_filter(date_from: date | None, date_to: date | None, memo: str = ""):
     """取り出した行のうち、取り下げる行かどうかを決める関数（メモ列の値を受け取る）。
 
@@ -51,43 +67,46 @@ def row_filter(date_from: date | None, date_to: date | None, memo: str = ""):
     return keep
 
 
-def make_chunks(src: Path, out_dir: Path, label: str, update_type: str, status: str,
+def make_chunks(src, out_dir: Path, label: str, update_type: str, status: str,
                 chunk_rows: int = 10000, encoding: str = "utf-8", newline: str = "\r\n",
                 keep=None) -> tuple[list[Path], int]:
     """取り出した CSV の更新種別とステータスを書き換え、chunk_rows 件ずつのファイルに分ける。
 
     ファイルは数百 MB になることがあるので、1行ずつ読みながら書き出す。UID のない行は消せないので飛ばす。
+    src は1つのファイルか、ファイルのリスト（月ごとに分けて取り出したもの。同じ UID は1回だけ）。
     keep を渡すと、メモ列の値で keep が True を返す行だけを残す。
     戻り値は（分けたファイルのリスト, 取り下げる件数）。
     """
     csv.field_size_limit(2 ** 31 - 1)
     out_dir.mkdir(parents=True, exist_ok=True)
-    paths, total = [], 0
+    paths, total, seen = [], 0, set()
     writer = f = None
-    with open(src, encoding="utf-8-sig", newline="") as fin:
-        reader = csv.reader(fin)
-        header = next(reader, None)
-        if not header:
-            return [], 0
-        names = [base_name(h) for h in header]
-        uid, kind, st = names.index("UID"), names.index("更新種別"), names.index("ステータス")
-        memo = names.index("メモ") if "メモ" in names else None
-        for row in reader:
-            if len(row) <= max(uid, kind, st) or not row[uid].strip():
+    for one in (src if isinstance(src, (list, tuple)) else [src]):
+        with open(one, encoding="utf-8-sig", newline="") as fin:
+            reader = csv.reader(fin)
+            header = next(reader, None)
+            if not header:
                 continue
-            if keep and not keep(row[memo] if memo is not None and memo < len(row) else ""):
-                continue
-            if total % chunk_rows == 0:
-                if f:
-                    f.close()
-                path = out_dir / f"{label}_{len(paths) + 1}.csv"
-                f = open(path, "w", encoding=encoding, newline="")
-                writer = csv.writer(f, lineterminator=newline, quoting=csv.QUOTE_MINIMAL)
-                writer.writerow(header)
-                paths.append(path)
-            row[kind], row[st] = update_type, status
-            writer.writerow(row)
-            total += 1
+            names = [base_name(h) for h in header]
+            uid, kind, st = names.index("UID"), names.index("更新種別"), names.index("ステータス")
+            memo = names.index("メモ") if "メモ" in names else None
+            for row in reader:
+                if len(row) <= max(uid, kind, st) or not row[uid].strip() or row[uid] in seen:
+                    continue
+                if keep and not keep(row[memo] if memo is not None and memo < len(row) else ""):
+                    continue
+                seen.add(row[uid])
+                if total % chunk_rows == 0:
+                    if f:
+                        f.close()
+                    path = out_dir / f"{label}_{len(paths) + 1}.csv"
+                    f = open(path, "w", encoding=encoding, newline="")
+                    writer = csv.writer(f, lineterminator=newline, quoting=csv.QUOTE_MINIMAL)
+                    writer.writerow(header)
+                    paths.append(path)
+                row[kind], row[st] = update_type, status
+                writer.writerow(row)
+                total += 1
     if f:
         f.close()
     return paths, total
@@ -113,11 +132,18 @@ def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_
     up = QmateUploader(cfg, headless=not headed, out_dir=out_dir)
 
     status = export_status or td["export_status"]
-    query = memo_filter(date_from, date_to, memo)
+    queries = memo_filters(date_from, date_to, memo)
+    query = "・".join(q for q in queries if q)
     span = describe(date_from, date_to)
     log(f"Q-mate のテンプレート出力で「{status}」の原稿を取り出します（{span}"
-        f"{f'、メモ「{query}」で絞り込み' if query else ''}）")
-    src = up.export_template(status, out_dir / f"{label}_取り出し.csv", memo=query)
+        f"{f'、メモ「{query}」で絞り込み' if query else ''}"
+        f"{f'、{len(queries)}回に分けて取り出し' if len(queries) > 1 else ''}）")
+    src = []
+    for i, qy in enumerate(queries, start=1):
+        if len(queries) > 1:
+            log(f"取り出し {i}/{len(queries)}（メモ「{qy}」）")
+        name = f"{label}_取り出し.csv" if len(queries) == 1 else f"{label}_取り出し_{i}.csv"
+        src.append(up.export_template(status, out_dir / name, memo=qy, log=log))
     keep = row_filter(date_from, date_to, memo) if (date_from or date_to or memo) else None
     chunks, total = make_chunks(src, out_dir, label, td["update_type"], td["status"], td.get("chunk_rows", 10000),
                                 keep=keep, **settings["csv"])

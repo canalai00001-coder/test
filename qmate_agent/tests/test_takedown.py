@@ -68,6 +68,21 @@ class TestChunks(unittest.TestCase):
         self.assertFalse(takedown.row_filter(date(2026, 11, 1), None)("手書きのメモ"))
         self.assertTrue(takedown.row_filter(None, None, "-2-2-7")("22-261104-2-2-7A"))
 
+    def test_period_is_exported_by_month(self):
+        # 期間を指定したら、会社の全原稿ではなく月ごとに Q-mate 側で絞って書き出す
+        self.assertEqual(takedown.memo_filters(date(2026, 10, 29), date(2026, 11, 11)), ["-2610", "-2611"])
+        self.assertEqual(takedown.memo_filters(date(2026, 12, 20), date(2027, 1, 5)), ["-2612", "-2701"])
+        self.assertEqual(takedown.memo_filters(date(2026, 11, 4), date(2026, 11, 4)), ["-261104-"])
+        self.assertEqual(takedown.memo_filters(None, None), [""])
+        self.assertEqual(takedown.memo_filters(date(2026, 1, 1), date(2026, 12, 31)), [""])  # 長すぎる期間は分けない
+        self.assertEqual(takedown.memo_filters(date(2026, 10, 1), date(2026, 11, 1), "-2-2-7"), ["-2-2-7"])
+
+    def test_several_exports_are_merged_without_duplicates(self):
+        a, b = export_file(10), export_file(10)  # 同じ UID が2つのファイルにある
+        paths, total = takedown.make_chunks([a, b], Path(tempfile.mkdtemp()), "x", "削除", "終了")
+        self.assertEqual(total, 10)
+        self.assertEqual(len(read(paths[0])), 11)
+
     def test_other_company_refused(self):
         settings = {"takedown": {}, "qmate": {"company": "AspiRove株式会社"}, "csv": {}}
         with self.assertRaises(RuntimeError):

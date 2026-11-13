@@ -84,7 +84,7 @@
     "export_memo_selector": "#template_export_form input[name=memo]",
     "export_button_selector": "#btn_template_export",
     "export_log_selector": "#template_export_log",
-    "export_poll_times": 360,
+    "export_poll_times": 720,
     "success_pattern": "成功",
     "error_pattern": "エラー|失敗|不正|できません",
     "result_poll_interval_ms": 5000,
