@@ -124,6 +124,14 @@ def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_
     from .accounts import qmate_config
 
     td = settings["takedown"]
+    status = export_status or td.get("export_status", "公開")
+    cond = conditions(company, date_from, date_to, memo, status)
+    if not dry_run:
+        # さきほど同じ条件で「取り出しと件数の確認」をしていれば、Q-mate から取り出し直さずにそのファイルを使う
+        found = find_prepared(cond)
+        if found:
+            log(f"{found['at'][11:16]} の確認で取り出したファイルを使います（取り出しを省きます）")
+            return use_prepared(found["name"], settings, headed=headed, log=log)
     q = qmate_config(settings, company)  # その会社のログイン情報と CSV取込画面
     stamp = datetime.now().strftime("%Y%m%d_%H%M")
     label = f"取り下げ_{company}_{stamp}"
@@ -131,7 +139,6 @@ def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_
     cfg = dict(q, result_poll_times=td.get("result_poll_times", q.get("result_poll_times", 0)))
     up = QmateUploader(cfg, headless=not headed, out_dir=out_dir)
 
-    status = export_status or td["export_status"]
     queries = memo_filters(date_from, date_to, memo)
     query = "・".join(q for q in queries if q)
     span = describe(date_from, date_to)
@@ -150,7 +157,12 @@ def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_
     log(f"取り下げる原稿: {total}件（{len(chunks)}ファイルに分けました）")
     result = {"company": company, "count": total, "files": [str(c) for c in chunks], "uploaded": 0,
               "span": span, "memo": query, "at": datetime.now().isoformat(timespec="seconds")}
-    if dry_run or not chunks:
+    if dry_run:
+        # 確認のときに取り出したファイルは残しておき、あとでそのまま取り下げられるようにする（use_prepared）
+        if chunks:
+            result["prepared"] = save_prepared(result, status, cond)
+        return result
+    if not chunks:
         return result
     for i, path in enumerate(chunks, start=1):
         log(f"取り下げ {i}/{len(chunks)}: {path.name}")
@@ -167,3 +179,102 @@ def describe(date_from: date | None, date_to: date | None) -> str:
     if date_from == date_to:
         return f"作成日：{date_from:%Y/%m/%d}"
     return f"作成日：{f'{date_from:%Y/%m/%d}' if date_from else ''}〜{f'{date_to:%Y/%m/%d}' if date_to else ''}"
+
+
+# ---------------------------------------------------------------- 確認で取り出したファイルを使って取り下げる
+def _prepared_path() -> Path:
+    from . import config
+    return config.STATE_DIR / "takedown_prepared.json"
+
+
+def _load_prepared() -> dict:
+    import json
+    p = _prepared_path()
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def _save_prepared_all(data: dict) -> None:
+    import json
+    p = _prepared_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def conditions(company: str, date_from: date | None, date_to: date | None, memo: str, status: str) -> dict:
+    """取り下げの条件（確認のときと同じ条件か比べるため）。"""
+    return {"company": company, "from": date_from.isoformat() if date_from else "",
+            "to": date_to.isoformat() if date_to else "", "memo": memo or "", "status": status}
+
+
+def find_prepared(cond: dict, today: date | None = None) -> dict | None:
+    """今日、同じ条件で取り出して、まだ取り下げ終わっていない確認の結果（いちばん新しいもの）。"""
+    return next((r for r in prepared_list(today) if r.get("cond") == cond), None)
+
+
+def save_prepared(result: dict, status: str, cond: dict | None = None) -> str:
+    """「取り出しと件数の確認だけ」の結果を残す。名前（取り出した日時と会社）を返す。"""
+    data = _load_prepared()
+    name = Path(result["files"][0]).parent.name
+    data[name] = {"company": result["company"], "count": result["count"], "files": result["files"],
+                  "span": result["span"], "memo": result["memo"], "status": status, "at": result["at"],
+                  "cond": cond or {}, "uploaded": 0, "finished_at": ""}
+    _save_prepared_all(data)
+    return name
+
+
+def prepared_list(today: date | None = None) -> list[dict]:
+    """今日取り出して、まだ取り下げ終わっていないもの（新しい順）。"""
+    today = today or date.today()
+    out = []
+    for name, r in _load_prepared().items():
+        if r["finished_at"] or r["at"][:10] != today.isoformat():
+            continue
+        if not all(Path(f).exists() for f in r["files"]):
+            continue
+        out.append(dict(r, name=name))
+    return sorted(out, key=lambda r: r["at"], reverse=True)
+
+
+def use_prepared(name: str, settings: dict, headed: bool = False, log=print, today: date | None = None) -> dict:
+    """確認のときに取り出して分けたファイルを、取り出し直さずにそのまま取り込んで取り下げる。
+
+    取り出した日のうちだけ使える（日をまたぐと、そのあと入稿した原稿が入っていないため）。
+    途中で失敗したときは、次は残りのファイルから続ける。
+    """
+    from .accounts import qmate_config
+    from .uploader import QmateUploader
+
+    today = today or date.today()
+    data = _load_prepared()
+    r = data.get(name)
+    if r is None:
+        raise RuntimeError(f"取り出し結果「{name}」が見つかりません")
+    if r["finished_at"]:
+        raise RuntimeError(f"この取り出し結果では {r['finished_at'][:16].replace('T', ' ')} に取り下げ済みです")
+    if r["at"][:10] != today.isoformat():
+        raise RuntimeError("取り出した日を過ぎているので使えません。もう一度「取り出しと件数の確認」からやり直してください")
+    files = [Path(f) for f in r["files"]]
+    missing = [f.name for f in files if not f.exists()]
+    if missing:
+        raise RuntimeError(f"取り出したファイルが見つかりません（{'、'.join(missing)}）。取り出しからやり直してください")
+    td = settings["takedown"]
+    q = qmate_config(settings, r["company"])
+    cfg = dict(q, result_poll_times=td.get("result_poll_times", q.get("result_poll_times", 0)))
+    up = QmateUploader(cfg, headless=not headed, out_dir=files[0].parent)
+    log(f"{r['at'][11:16]} に取り出した結果で取り下げます：{r['company']} / {r['span']}"
+        f"{' / メモ「' + r['memo'] + '」' if r['memo'] else ''} / {r['count']}件（{len(files)}ファイル）")
+    for i, path in enumerate(files, start=1):
+        if i <= r["uploaded"]:
+            log(f"取り下げ {i}/{len(files)}: {path.name}（前回取り込み済み）")
+            continue
+        log(f"取り下げ {i}/{len(files)}: {path.name}")
+        res = up.upload(path, path.stem)
+        if not res.ok:
+            raise RuntimeError(f"取り下げの取り込みに失敗しました（{path.name}）: {res.message}。"
+                               "もう一度押すと、残りのファイルから続けます")
+        r["uploaded"] = i
+        _save_prepared_all(data)
+    r["finished_at"] = datetime.now().isoformat(timespec="seconds")
+    _save_prepared_all(data)
+    return {"company": r["company"], "count": r["count"], "files": r["files"], "uploaded": len(files),
+            "span": r["span"], "memo": r["memo"], "at": r["finished_at"], "from_prepared": name}

@@ -707,9 +707,34 @@ def cmd_takedown(args) -> int:
         return 2
     if args.dry_run:
         print("--dry-run のため、取り込みはしていません")
+        if result.get("prepared"):
+            print(f"この取り出し結果は、今日のうちなら取り出し直さずに取り下げられます（{result['prepared']}）")
     else:
         _record_takedown(result)
         print(f"取り下げました: {result['count']}件")
+    return 0
+
+
+def cmd_takedown_use(args) -> int:
+    """「取り出しと件数の確認だけ」で取り出したファイルを、取り出し直さずにそのまま取り込んで取り下げる。"""
+    from . import takedown
+
+    settings = config.load("settings.json")
+    if not args.name:
+        found = takedown.prepared_list()
+        if not found:
+            print("今日取り出して、まだ取り下げていない結果はありません")
+            return 0
+        for r in found:
+            print(f"{r['name']}: {r['company']} / {r['span']} / {r['count']}件（{r['at'][11:16]} 取り出し）")
+        return 0
+    try:
+        result = takedown.use_prepared(args.name, settings, headed=args.headed)
+    except Exception as e:
+        print(f"失敗: {e}")
+        return 2
+    _record_takedown(result)
+    print(f"取り下げました: {result['count']}件")
     return 0
 
 
@@ -865,6 +890,11 @@ def main(argv=None) -> int:
 
     ss = sub.add_parser("salary-sheet", help="給与設定シートを作る（無ければ）・中身を確かめる")
     ss.set_defaults(func=cmd_salary_sheet)
+
+    tu = sub.add_parser("takedown-use", help="確認で取り出した結果を、取り出し直さずにそのまま使って取り下げる")
+    tu.add_argument("--name", help="取り出し結果の名前（省略すると今日の一覧を出す）")
+    tu.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
+    tu.set_defaults(func=cmd_takedown_use)
 
     lt = sub.add_parser("login-test", help="会社のログイン情報で Q-mate にログインできるか確かめる")
     g = lt.add_mutually_exclusive_group(required=True)

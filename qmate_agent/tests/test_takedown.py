@@ -91,3 +91,101 @@ class TestChunks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUsePrepared(unittest.TestCase):
+    """確認（ドライラン）で取り出したファイルを、取り出し直さずに使って取り下げる。"""
+
+    def setUp(self):
+        from unittest import mock
+        from qmate_agent import config
+        self.tmp = Path(tempfile.mkdtemp())
+        p = mock.patch.object(config, "STATE_DIR", self.tmp / "state")
+        p.start()
+        self.addCleanup(p.stop)
+        self.files = []
+        d = self.tmp / "取り下げ_A社_20261113_1000"
+        d.mkdir()
+        for i in range(3):
+            f = d / f"取り下げ_A社_20261113_1000_{i + 1}.csv"
+            f.write_text("x", encoding="utf-8")
+            self.files.append(str(f))
+        self.name = takedown.save_prepared({"company": "A社", "count": 25000, "files": self.files, "span": "作成日：全期間",
+                                            "memo": "", "at": "2026-11-13T10:00:00"}, "公開")
+
+    def use(self, results, today=date(2026, 11, 13)):
+        from unittest import mock
+        from types import SimpleNamespace
+        sent = []
+
+        class Up:
+            def __init__(self, *a, **k):
+                pass
+
+            def upload(self, path, label):
+                sent.append(path.name)
+                return SimpleNamespace(ok=results.pop(0), message="エラー")
+        settings = {"takedown": {}, "qmate": {}}
+        with mock.patch("qmate_agent.accounts.qmate_config", return_value={}), \
+                mock.patch("qmate_agent.uploader.QmateUploader", Up):
+            return takedown.use_prepared(self.name, settings, log=lambda *a: None, today=today), sent
+
+    def test_listed_today_only(self):
+        self.assertEqual([r["name"] for r in takedown.prepared_list(date(2026, 11, 13))], [self.name])
+        self.assertEqual(takedown.prepared_list(date(2026, 11, 14)), [])
+        with self.assertRaisesRegex(RuntimeError, "取り出した日を過ぎて"):
+            self.use([True] * 3, today=date(2026, 11, 14))
+
+    def test_uses_files_without_export_and_only_once(self):
+        result, sent = self.use([True] * 3)
+        self.assertEqual(len(sent), 3)
+        self.assertEqual(result["count"], 25000)
+        self.assertEqual(takedown.prepared_list(date(2026, 11, 13)), [])
+        with self.assertRaisesRegex(RuntimeError, "取り下げ済み"):
+            self.use([True])
+
+    def test_resumes_after_failure(self):
+        with self.assertRaisesRegex(RuntimeError, "残りのファイルから続けます"):
+            self.use([True, False])
+        result, sent = self.use([True, True])
+        self.assertEqual(sent, [Path(f).name for f in self.files[1:]])  # 1本目は前回取り込み済み
+
+
+class TestRunReusesDryRun(unittest.TestCase):
+    def setUp(self):
+        from unittest import mock
+        from datetime import datetime
+        from qmate_agent import config
+        self.tmp = Path(tempfile.mkdtemp())
+        p = mock.patch.object(config, "STATE_DIR", self.tmp / "state")
+        p.start()
+        self.addCleanup(p.stop)
+        f = self.tmp / "取り下げ_A社_x" / "1.csv"
+        f.parent.mkdir()
+        f.write_text("x", encoding="utf-8")
+        cond = takedown.conditions("A社", date(2026, 10, 29), date(2026, 11, 11), "", "公開")
+        takedown.save_prepared({"company": "A社", "count": 5, "files": [str(f)], "span": "s", "memo": "",
+                                "at": datetime.now().isoformat(timespec="seconds")}, "公開", cond)
+
+    def run_td(self, **kw):
+        from unittest import mock
+        settings = {"takedown": {"export_status": "公開", "update_type": "削除", "status": "終了"}, "qmate": {}, "csv": {}}
+        args = dict(date_from=date(2026, 10, 29), date_to=date(2026, 11, 11), export_status="公開")
+        args.update(kw)
+        with mock.patch.object(takedown, "use_prepared", return_value={"count": 5}) as use, \
+                mock.patch("qmate_agent.accounts.qmate_config", side_effect=RuntimeError("取り出しに進んだ")):
+            try:
+                takedown.run("A社", settings, self.tmp, log=lambda *a: None, **args)
+            except RuntimeError as e:
+                return use, str(e)
+        return use, ""
+
+    def test_same_conditions_skip_export(self):
+        use, err = self.run_td()
+        use.assert_called_once()
+        self.assertEqual(err, "")
+
+    def test_other_conditions_export_again(self):
+        use, err = self.run_td(date_to=date(2026, 11, 12))
+        use.assert_not_called()
+        self.assertEqual(err, "取り出しに進んだ")

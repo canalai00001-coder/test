@@ -453,6 +453,7 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
       <label>対象ステータス<select id="t_status"><option>公開</option><option>下書き</option><option>下書き＋公開</option><option>終了</option><option>全てのステータス</option></select></label>
     </div>
     <p class="note">1日だけなら「から」と「まで」に同じ日付を入れてください。作成日は求人メモの「22-<b>261104</b>-…」の部分です。</p>
+    <p class="note">「取り出しと件数の確認だけ」のあと、同じ日に同じ条件で「取り下げる」を押すと、確認のときに取り出したファイルをそのまま使います（Q-mate からの取り出しを省くので早く終わります）。</p>
     <div class="opts"><label><input type="checkbox" id="t_headed"> ブラウザを表示する</label></div>
     <div class="row"><button class="btn" id="t_dry">取り出しと件数の確認だけ（Q-mate は変えない）</button><button class="btn danger" id="t_run">取り下げる</button></div>
   </div>
