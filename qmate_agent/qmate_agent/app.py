@@ -541,7 +541,10 @@ async function setEngine(target,engine){if(!confirm(`${target}の原稿を${ENG[
 const opt=()=>({dry_run:p_dry.checked,headed:p_headed.checked,force:p_force.checked});
 async function load(){plans.innerHTML=takedowns.innerHTML='<div class="empty">読み込んでいます…</div>';
  try{const d=await api("/api/overview");today.textContent="今日："+d.today;showEngines(d.engines);
+  // 一覧を読み直しても、選んでいた会社のままにする（処理のあとに先頭の会社に戻ると、間違えたと思いやすいため）
+  let keep=t_company.value;try{keep=keep||localStorage.getItem("t_company")||""}catch(e){}
   t_company.innerHTML=d.companies.map(c=>`<option>${esc(c)}</option>`).join("");
+  if(keep&&d.companies.includes(keep))t_company.value=keep;
   PLANS=d.plans;TDS=d.takedowns;render()}catch(e){plans.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
 function render(){const show=p_showdone.checked;const d={plans:PLANS.filter(p=>show||!p.done),takedowns:TDS.filter(r=>show||!r.done)};
   const hidden=(PLANS.length-d.plans.length)+(TDS.length-d.takedowns.length);
@@ -552,6 +555,7 @@ function render(){const show=p_showdone.checked;const d={plans:PLANS.filter(p=>s
 async function start(p,b,msg){if(msg&&!confirm(msg))return;try{await post(p,b);since=0;log.textContent="";poll()}catch(e){alert(e.message)}}
 run_today.onclick=()=>start("/api/schedule",opt(),"入稿予定表・取り下げ予定表の今日の行を実行します。\n取り下げ予定表の行は Q-mate の原稿を削除します（元に戻せません）。よろしいですか？"+ngNote(PLANS.filter(p=>p.today&&!p.done&&p.check.startsWith("❌"))));
 let PLANS=[],TDS=[];
+t_company.onchange=()=>{try{localStorage.setItem("t_company",t_company.value)}catch(e){}};
 test_today.onclick=()=>{const n=PLANS.filter(p=>p.today&&!p.done).length;if(!n)return alert("今日の行で、テストする行がありません");start("/api/preview/run",{today:true},`今日の行 ${n}件 をテストします（入稿はしません）。よろしいですか？`)};
 const ngNote=rows=>rows.length?`\n\n※ 職種名の確認が ❌ の行があります（${rows.map(p=>p.row+"行目").join("、")}）。このまま実行すると、その行は生成で止まります。`:"";
 function runRow(row,status,count){const ng=PLANS.filter(p=>p.row===row&&p.check.startsWith("❌"));start("/api/schedule",{...opt(),row},`入稿予定表 ${row}行目（${status}・${count}件）を実行します。よろしいですか？`+ngNote(ng))}
