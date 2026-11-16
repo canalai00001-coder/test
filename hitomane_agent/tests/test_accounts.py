@@ -42,7 +42,7 @@ class TestLoginInfo(unittest.TestCase):
 
     def test_missing_row(self):
         with self.assertRaisesRegex(RuntimeError, "『ヒトマネ』の行を足して"):
-            accounts.login_info(SETTINGS, FakeBook([["canal benefits株式会社", "c", "x", "", ""]]))
+            accounts.login_info(SETTINGS, FakeBook([]))
 
     def test_blank_password(self):
         with self.assertRaisesRegex(RuntimeError, "パスワードが空欄"):
@@ -81,6 +81,27 @@ class TestHitomaneSheet(unittest.TestCase):
     def test_neither_sheet(self):
         with self.assertRaisesRegex(RuntimeError, "ヒトマネログイン情報"):
             accounts.login_info(SETTINGS, MultiBook({}))
+
+
+
+# 実際のシートの形：会社名は空欄の担当者ごとの行と、会社名の入った行がある
+REAL = [HEAD + [""], ["GritMate株式会社", "Minami0373", "p0", "", ""], ["", "Minami0373", "p1", "", "守谷さん"], ["", "Mika0910", "p2", "", "三成さん"],
+        ["", "kawana0107", "p3", "", "川名"], ["GritMate株式会社", "Minami0373", "p1", "", ""]]
+
+
+class TestStaffLogins(unittest.TestCase):
+    def test_first_row_by_default(self):
+        info = accounts.login_info(SETTINGS, MultiBook({"ヒトマネログイン情報": REAL}))
+        self.assertEqual((info["login_id"], info["password"]), ("Minami0373", "p1"))
+
+    def test_choose_by_login_id_or_memo(self):
+        book = MultiBook({"ヒトマネログイン情報": REAL})
+        self.assertEqual(accounts.login_info(dict(SETTINGS, login_user="kawana0107"), book)["password"], "p3")
+        self.assertEqual(accounts.login_info(dict(SETTINGS, login_user="三成"), book)["login_id"], "Mika0910")
+
+    def test_unknown_user(self):
+        with self.assertRaisesRegex(RuntimeError, "nobody"):
+            accounts.login_info(dict(SETTINGS, login_user="nobody"), MultiBook({"ヒトマネログイン情報": REAL}))
 
 
 if __name__ == "__main__":

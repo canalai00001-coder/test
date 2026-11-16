@@ -9,6 +9,8 @@
   "accounts_sheets": ["ヒトマネログイン情報", "Q-mateログイン情報"],
   "_accounts_sheets_説明": "ログイン情報を探すシート（上から順に）。ヒトマネ専用のシートは会社名の列がなくてもよい。",
   "login_company": "ヒトマネ",
+  "login_user": "",
+  "_login_user_説明": "このパソコンで使うヒトマネのログインID（またはログイン情報シートのメモの名前）。settings.local.json に書く。空欄なら担当者の行の最初の行。",
   "hitomane": {
     "base_url": "https://kanri.hitomgr.jp/m66w/",
     "timeout_ms": 60000,
