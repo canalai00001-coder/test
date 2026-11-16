@@ -54,6 +54,7 @@ def make_handler(st: State):
                 n = st.hits if word else 50000
                 return self.send(200, "<form action=/m66w/jobs>フリーワード<input type=text name=word>"
                                       "<button type=submit>検索</button></form>"
+                                      "<p>使い方：<a href=/m66w/help>「ファイル取出予約」機能について</a></p>"
                                       f"<div class=count>全{n}件</div>"
                                       "<form method=post action=/m66w/export_reserve><button type=submit>ファイル取出予約</button></form>"
                                       "<button>ファイル取込予約</button>")

@@ -90,7 +90,15 @@ class Survey:
         return self.record(name, True, page)
 
     def click_text(self, page: Page, text: str) -> bool:
-        loc = page.get_by_text(text, exact=False)
+        """ボタン・リンクのうち、名前がちょうど text のものを押す。無ければ文字を含むもの。
+        （「『ファイル取出予約』機能について」のような説明のリンクを押さないように、ちょうど一致を先に見る）"""
+        loc = page.get_by_role("button", name=text, exact=True)
+        if not loc.count():
+            loc = page.get_by_role("link", name=text, exact=True)
+        if not loc.count():
+            loc = page.get_by_text(text, exact=True)
+        if not loc.count():
+            loc = page.get_by_text(text, exact=False)
         if not loc.count():
             return False
         loc.first.click()
