@@ -31,7 +31,7 @@ class State:
         self.total = 50000          # 募集管理の全件数
         self.imports = []            # 取り込んだ {"file": bytes, "dup": 「上書きせずに取り込む」が付いていたか}
         self.dup_default = False     # 取込ダイアログの「上書きせずに取り込む」が最初から付いているか
-        self.import_ready_after = 1  # 取込ファイル一覧で「最新を表示する」を何回押したら終わるか（-1 なら終わらない）
+        self.import_ready_after = 2  # 取込ファイル一覧で「最新を表示する」を何回押したら終わるか（-1 なら終わらない。1回目は「進行中」）
         self.import_refreshes = 0
         self.import_status = "完了"
         # 終わった行の詳細。None なら実物（2026-11-16 に1件取り込んだとき）と同じ「成功: N件 （8秒）」（N は CSV の行数）
@@ -138,10 +138,15 @@ def make_handler(st: State):
                 for n, imp in reversed(list(enumerate(st.imports, start=1))):
                     last = n == len(st.imports)
                     finished = done or not last
-                    status = st.import_status if finished else "待機中"
+                    # 実物は 待機中「実行までしばらくお待ち下さい」→ 進行中「0/1件」→ 完了「成功: 1件 （2秒）」
                     lines = len(list(csv.reader(io.StringIO(imp["file"].decode("cp932"), newline="")))) - 1
-                    detail = ((st.import_detail if st.import_detail is not None else f"成功: {lines}件 （8秒）")
-                              if finished else "実行までしばらくお待ち下さい")
+                    if finished:
+                        status = st.import_status
+                        detail = st.import_detail if st.import_detail is not None else f"成功: {lines}件 （8秒）"
+                    elif st.import_refreshes == 0:
+                        status, detail = "待機中", "実行までしばらくお待ち下さい"
+                    else:
+                        status, detail = "進行中", f"0/{lines}件"
                     rows += (f"<tr class=record><td>2026/11/16 10:00:{n:02d}</td>"
                              f"<td>{'2026/11/16 10:05:00' if finished else '-'}</td><td>募集管理（新）</td>"
                              f"<td>upload_{n}.csv</td><td class=status-column>{status}</td><td>{detail}</td><td>2026/11/19</td></tr>")
