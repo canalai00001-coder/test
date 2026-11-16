@@ -15,8 +15,10 @@
     "base_url": "https://kanri.hitomgr.jp/m66w/",
     "timeout_ms": 60000,
     "poll_interval_ms": 5000,
-    "export_poll_times": 360
+    "export_poll_times": 360,
+    "import_poll_times": 360
   },
+  "_hitomane_説明": "poll_interval_ms ごとに「最新を表示する」を押して、取出・取込ファイル一覧の結果を待つ（360回 × 5秒 = 30分まで）。",
   "_csv_説明": "取り込む CSV の文字コードと改行。取り出した CSV（2026-11-16 の画面調査）と同じにする：Shift_JIS（cp932）・BOM なし・改行 CRLF（セルの中の改行も CRLF）・必要なときだけ \"\" で囲む。見出しは新FMT(テンプレ)の192列と同じ。",
   "csv": {"encoding": "cp932", "newline": "\r\n"}
 }

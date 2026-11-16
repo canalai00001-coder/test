@@ -3,7 +3,10 @@
 2026-11-16 の画面調査で分かった実物の作りをまねる：募集管理の検索は Ajax（#search_freeword・#search_recruitments・
 a.btn_search_btn02）、検索欄の見出しにも「検索」の文字がある、「ファイル取出予約」は export_bg_csv() で確認ダイアログが出る、
 予約の一覧は「取込ファイル一覧」（csv_import_queues）と「取出ファイル一覧」（csv_export_queues）に分かれている。
+取込ダイアログは iframe（select_new_format）で、#file_csv・#duplicate_check_term・a.btn_operation_btn02（queue_import()）。
+取込ファイル一覧の結果の出方（完了・エラーの文言）は実物ではまだ見ていないので、ここでは State で変えられるようにしている。
 """
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -23,6 +26,13 @@ class State:
         self.refreshes = 0
         self.old_done_row = False  # 前からある「完了」の行を一覧に出すか
         self.export_lost = False   # 取出予約を受け付けても一覧に行が増えない（予約が通らなかったとき）
+        self.total = 50000          # 募集管理の全件数
+        self.imports = []            # 取り込んだ {"file": bytes, "dup": 「上書きせずに取り込む」が付いていたか}
+        self.dup_default = False     # 取込ダイアログの「上書きせずに取り込む」が最初から付いているか
+        self.import_ready_after = 1  # 取込ファイル一覧で「最新を表示する」を何回押したら終わるか（-1 なら終わらない）
+        self.import_refreshes = 0
+        self.import_status = "完了"
+        self.import_detail = "全1件中 1件の取込が完了しました"
         self.csv = "﻿募集番号,ステータス,開始日,終了日\r\nCB93208,掲載,2026/08/17,2027/08/17\r\n"
 
 
@@ -33,12 +43,14 @@ JOBS = """<div class=title>検索</div>
 <option value=code>募集番号</option></select>
 <a href=# class="btn_search_btn01" onclick="return false;">クリア</a>
 <a href=# class="btn_search_btn02 hito_enterkey" onclick="doSearch();return false;">検索</a></form>
-<div id=as_rec_recruitments-content><div class=count>全50000件</div>
+<div id=as_rec_recruitments-content><div class=count>全{total}件</div>
 <table><tr class=record id=as_rec_recruitments-list-573038-row><td>自社</td><td>掲載</td><td>CB株式会社(B001)</td>
 <td><a class=btn_list_btn02 title="詳細を開く" href=/m66w/rec_recruitments/edit/573038>詳細</a></td></tr></table></div>
 <p>使い方：<a href=/m66w/help>「ファイル取出予約」機能について</a></p>
 <a href=# class=btn_menu_btn08 onclick="export_bg_csv();return false;">ファイル取出予約</a>
-<a href=/m66w/rec_recruitment_csv_items/select_new_format class=btn_menu_btn08>ファイル取込予約</a>
+<a href=/m66w/rec_recruitment_csv_items/select_new_format class="btn_menu_btn08 hito_subwindow"
+   onclick="document.getElementById('dlg').style.display='block';document.getElementById('sub').src=this.href;return false;">ファイル取込予約</a>
+<div id=dlg style="display:none"><iframe id=sub class=cboxIframe></iframe></div>
 <script>
 function doSearch() {
   var w = document.getElementById('search_freeword'), f = document.getElementById('search_recruitments');
@@ -93,13 +105,18 @@ def make_handler(st: State):
                                       "src=/m66w/rec_recruitment_csv_items/select_new_format></iframe>"
                                       "<button onclick=\"document.getElementById('dlg').style.display='none'\">閉じる</button></div>" + links)
             if u.path == "/m66w/rec_recruitment_csv_items/select_new_format":
+                checked = " checked" if st.dup_default else ""
                 return self.send(200, "募集情報のファイルを取り込む（新フォーマット）"
-                                      "<form method=post action=/m66w/import_reserve enctype=multipart/form-data>"
-                                      "<input type=file name=f><label><input type=checkbox name=no_overwrite>"
-                                      "既存原稿と同じ募集番号の原稿を上書きせずに取り込む</label>"
-                                      "<button type=submit>ファイル取込予約</button></form>")
+                                      "<form id=rec_form method=post action=/m66w/rec_recruitment_csv_items/complete_new_format "
+                                      "enctype=multipart/form-data><input type=hidden name=format_name value=newhmgrfrm>"
+                                      "<input id=file_csv name='file[csv]' type=file>"
+                                      f"<input type=checkbox name=duplicate_check_term id=duplicate_check_term value=1{checked}>"
+                                      "<label for=duplicate_check_term>既存原稿と同じ募集番号の原稿を上書きせずに取り込む</label>"
+                                      "<a href=# class=btn_operation_btn02 onclick='queue_import();'>ファイル取込予約</a></form>"
+                                      "<script>function queue_import() { if (confirm('ファイル取込予約を行いますか？')) "
+                                      "document.getElementById('rec_form').submit(); }</script>")
             if u.path == "/m66w/rec_recruitments":
-                return self.send(200, JOBS)
+                return self.send(200, JOBS.replace("{total}", str(st.total)))
             if u.path == "/m66w/rec_recruitments/edit/573038":
                 return self.send(200, "<form method=post action=/m66w/rec_recruitments/update/573038><table>"
                                       "<tr><th>媒体</th><td>自社</td></tr>"
@@ -111,8 +128,24 @@ def make_handler(st: State):
                 n = st.hits if word else 50000
                 return self.send(200, f"<div class=count>全{n}件</div>", ctype="text/plain; charset=utf-8")
             if u.path == "/m66w/csv_import_queues":
-                return self.send(200, "<table><tr><th>リクエスト日時</th><th>データ種別</th><th>ステータス</th><th>詳細</th></tr>"
-                                      "<tr><td colspan=7>見つかりませんでした</td></tr></table>")
+                if q.get("refresh"):
+                    st.import_refreshes += 1
+                done = st.import_ready_after >= 0 and st.import_refreshes >= st.import_ready_after
+                rows = ""
+                for n, imp in reversed(list(enumerate(st.imports, start=1))):
+                    last = n == len(st.imports)
+                    status = st.import_status if (done or not last) else "待機中"
+                    detail = st.import_detail if (done or not last) else ""
+                    rows += (f"<tr class=record><td>2026/11/16 10:00:{n:02d}</td><td></td><td>募集管理（新）</td>"
+                             f"<td>upload_{n}.csv</td><td class=status-column>{status}</td><td>{detail}</td><td>2026/11/19</td></tr>")
+                empty = ("<tbody class=messages><tr><td colspan=7><p class=empty-message"
+                         f"{' style=display:none' if rows else ''}>見つかりませんでした</p></td></tr></tbody>")
+                return self.send(200, "<ul><li>「最新を表示する」ボタンをクリック、または一定時間ごとに画面はリロードされ最新の状況が表示されます</li></ul>"
+                                      "<a href='javascript: void(0);' id=view_reload_button title=リロード "
+                                      "onclick=\"location.href='/m66w/csv_import_queues?refresh=1'\">最新を表示する</a>"
+                                      "<table><tr><th>リクエスト日時</th><th>取込完了日時</th><th>データ種別</th><th>取込ファイル</th>"
+                                      "<th>ステータス</th><th>詳細</th><th>削除予定日</th></tr>"
+                                      + empty + "<tbody class=records>" + rows + "</tbody></table>")
             if u.path == "/m66w/csv_export_queues":
                 if q.get("refresh"):
                     st.refreshes += 1
@@ -142,13 +175,22 @@ def make_handler(st: State):
 
         def do_POST(self):
             u = urlparse(self.path)
-            body = self.rfile.read(int(self.headers.get("Content-Length", 0) or 0)).decode()
+            raw = self.rfile.read(int(self.headers.get("Content-Length", 0) or 0))
+            body = raw.decode("utf-8", "replace")
             if u.path == "/m66w/login":
                 ok = "pw=pw" in body
                 return self.send(302, "", location="/m66w/top" if ok else "/m66w/")
             if u.path.startswith("/m66w/rec_recruitments/update/"):
                 st.saved = True
                 return self.send(200, "saved")
+            if u.path == "/m66w/rec_recruitment_csv_items/complete_new_format":
+                boundary = re.search(r"boundary=(.+)", self.headers["Content-Type"]).group(1).encode()
+                part = next(p for p in raw.split(b"--" + boundary) if b'name="file[csv]"' in p)
+                data = part.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n", 1)[0]
+                st.imports.append({"file": data, "dup": b'name="duplicate_check_term"' in raw})
+                st.import_reserved = True
+                st.import_refreshes = 0
+                return self.send(200, "ファイル取込予約を受け付けました")
             if u.path == "/m66w/import_reserve":
                 st.import_reserved = True
                 return self.send(200, "ok")
