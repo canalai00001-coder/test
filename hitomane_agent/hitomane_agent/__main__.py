@@ -1,6 +1,6 @@
 """ヒトマネ入稿ツールのコマンド。
 
-  python -m hitomane_agent survey [--headed] [--sample 募集番号]   管理画面の画面調査
+  python -m hitomane_agent survey [--headed] [--sample [募集番号]]   管理画面の画面調査
 """
 import argparse
 import sys
@@ -37,7 +37,8 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("survey", help="ヒトマネ管理画面の作りを調べて output に保存する（取り込み・取り下げはしない）")
     s.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
-    s.add_argument("--sample", help="この募集番号の原稿を1件だけ取り出して、CSV の見本を保存する")
+    s.add_argument("--sample", nargs="?", const="auto",
+                   help="この募集番号の原稿を1件だけ取り出して、CSV の見本を保存する（番号を省くと、一覧のいちばん上の原稿を使う）")
     s.add_argument("--user", help="使うログインID（またはログイン情報シートのメモの名前）。省略時は settings の login_user")
     s.set_defaults(func=cmd_survey)
     args = ap.parse_args(argv)

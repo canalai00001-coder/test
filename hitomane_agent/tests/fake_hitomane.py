@@ -1,4 +1,9 @@
-"""テスト用のにせのヒトマネ管理画面（http.server）。実物の画面の作りは画面調査の結果で分かるので、ここでは文字で探せる形だけをまねる。"""
+"""テスト用のにせのヒトマネ管理画面（http.server）。
+
+2026-11-16 の画面調査で分かった実物の作りをまねる：募集管理の検索は Ajax（#search_freeword・#search_recruitments・
+a.btn_search_btn02）、検索欄の見出しにも「検索」の文字がある、「ファイル取出予約」は export_bg_csv() で確認ダイアログが出る、
+予約の一覧は「取込ファイル一覧」（csv_import_queues）と「取出ファイル一覧」（csv_export_queues）に分かれている。
+"""
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -10,11 +15,47 @@ class State:
         self.reserve_link = True
         self.import_reserved = False
         self.export_reserved = 0
+        self.saved = False       # 原稿の詳細画面で「保存」が押されたか
+        self.code = "CB93208"  # 一覧のいちばん上の原稿の募集番号
+        self.last_search = None  # 最後に検索した (フリーワード, 項目)
         self.hits = 1           # 募集管理の検索結果の件数
         self.export_ready_after = 1  # 「最新を表示する」を何回押したら完了になるか（-1 なら完了しない）
         self.refreshes = 0
+        self.old_done_row = False  # 前からある「完了」の行を一覧に出すか
+        self.export_lost = False   # 取出予約を受け付けても一覧に行が増えない（予約が通らなかったとき）
         self.csv = "﻿募集番号,ステータス,開始日,終了日\r\nCB93208,掲載,2026/08/17,2027/08/17\r\n"
 
+
+JOBS = """<div class=title>検索</div>
+<form id=as_rec_recruitments-search-form onsubmit="return false">フリーワード
+<input type=text name=search id=search_freeword>
+<select name=search_recruitments id=search_recruitments><option value="">全ての項目</option><option value=m_branch>会社名</option>
+<option value=code>募集番号</option></select>
+<a href=# class="btn_search_btn01" onclick="return false;">クリア</a>
+<a href=# class="btn_search_btn02 hito_enterkey" onclick="doSearch();return false;">検索</a></form>
+<div id=as_rec_recruitments-content><div class=count>全50000件</div>
+<table><tr class=record id=as_rec_recruitments-list-573038-row><td>自社</td><td>掲載</td><td>CB株式会社(B001)</td>
+<td><a class=btn_list_btn02 title="詳細を開く" href=/m66w/rec_recruitments/edit/573038>詳細</a></td></tr></table></div>
+<p>使い方：<a href=/m66w/help>「ファイル取出予約」機能について</a></p>
+<a href=# class=btn_menu_btn08 onclick="export_bg_csv();return false;">ファイル取出予約</a>
+<a href=/m66w/rec_recruitment_csv_items/select_new_format class=btn_menu_btn08>ファイル取込予約</a>
+<script>
+function doSearch() {
+  var w = document.getElementById('search_freeword'), f = document.getElementById('search_recruitments');
+  var qs = 'search=' + encodeURIComponent(w.value) + '&search_recruitments=' + encodeURIComponent(f.value);
+  w.disabled = true;
+  setTimeout(function () {
+    fetch('/m66w/rec_recruitments/update_table?' + qs).then(function (r) { return r.text(); }).then(function (t) {
+      document.getElementById('as_rec_recruitments-content').innerHTML = t; w.disabled = false;
+    });
+  }, 300);
+}
+function export_bg_csv() {
+  if (confirm('ファイル取出予約を行いますか？')) {
+    fetch('/m66w/export_reserve', {method: 'POST'}).then(function () { alert('ファイル取出予約を受け付けました'); });
+  }
+}
+</script>"""
 
 PAGE = "<!doctype html><html><head><meta charset=utf-8><title>{title}</title></head><body>{body}</body></html>"
 
@@ -43,31 +84,44 @@ def make_handler(st: State):
                 return self.send(200, "<form method=post action=/m66w/login>ユーザーID<input type=text name=uid>"
                                       "パスワード<input type=password name=pw><button type=submit>ログイン</button></form>")
             if u.path == "/m66w/top":
-                link = "<a href=/m66w/reservations>ファイル取込・取出予約一覧</a>" if st.reserve_link else ""
-                return self.send(200, "<h2>募集情報を管理する</h2><a href=/m66w/jobs>募集管理</a>"
+                links = ("<a href=/m66w/csv_import_queues>取込ファイル一覧</a>"
+                         "<a href=/m66w/csv_export_queues>取出ファイル一覧</a>") if st.reserve_link else ""
+                return self.send(200, "<h2>募集情報を管理する</h2><a href=/m66w/rec_recruitments>募集管理</a>"
                                       "<button id=imp onclick=\"document.getElementById('dlg').style.display='block'\">ファイルを取込む</button>"
                                       "<div id=dlg style='display:none'>募集情報のファイルを取り込む（新フォーマット）"
                                       "<input type=file name=f><button onclick=\"fetch('/m66w/import_reserve',{method:'POST'})\">ファイル取込予約</button>"
-                                      "<button onclick=\"document.getElementById('dlg').style.display='none'\">閉じる</button></div>" + link)
-            if u.path == "/m66w/jobs":
-                word = q.get("word", [""])[0]
+                                      "<button onclick=\"document.getElementById('dlg').style.display='none'\">閉じる</button></div>" + links)
+            if u.path == "/m66w/rec_recruitments":
+                return self.send(200, JOBS)
+            if u.path == "/m66w/rec_recruitments/edit/573038":
+                return self.send(200, "<form method=post action=/m66w/rec_recruitments/update/573038><table>"
+                                      "<tr><th>媒体</th><td>自社</td></tr>"
+                                      f"<tr><th>募集番号<span class=req>必須</span></th><td><input type=text name='record[c01]' value='{st.code}'></td></tr>"
+                                      "</table><button type=submit>保存する</button></form>")
+            if u.path == "/m66w/rec_recruitments/update_table":
+                word, field = q.get("search", [""])[0], q.get("search_recruitments", [""])[0]
+                st.last_search = (word, field)
                 n = st.hits if word else 50000
-                return self.send(200, "<form action=/m66w/jobs>フリーワード<input type=text name=word>"
-                                      "<button type=submit>検索</button></form>"
-                                      "<p>使い方：<a href=/m66w/help>「ファイル取出予約」機能について</a></p>"
-                                      f"<div class=count>全{n}件</div>"
-                                      "<form method=post action=/m66w/export_reserve><button type=submit>ファイル取出予約</button></form>"
-                                      "<button>ファイル取込予約</button>")
-            if u.path == "/m66w/reservations":
+                return self.send(200, f"<div class=count>全{n}件</div>", ctype="text/plain; charset=utf-8")
+            if u.path == "/m66w/csv_import_queues":
+                return self.send(200, "<table><tr><th>リクエスト日時</th><th>データ種別</th><th>ステータス</th><th>詳細</th></tr>"
+                                      "<tr><td colspan=7>見つかりませんでした</td></tr></table>")
+            if u.path == "/m66w/csv_export_queues":
                 if q.get("refresh"):
                     st.refreshes += 1
                 done = st.export_ready_after >= 0 and st.refreshes >= st.export_ready_after
                 detail = "取出しファイル: <a href=/m66w/dl/sample.csv>rec_jobs_sample.csv</a> 全1件" if done else "実行までしばらくお待ち下さい"
-                return self.send(200, "<a href=/m66w/reservations?refresh=1>最新を表示する</a>"
+                old = ("<tr><td>2026/11/15 09:00:00</td><td>募集管理（新）</td><td>完了</td>"
+                       "<td>取出しファイル: <a href=/m66w/dl/old.csv>rec_jobs_old.csv</a> 全50000件</td></tr>") if st.old_done_row else ""
+                mine = (f"<tr><td>2026/11/16 10:00:00</td><td>募集管理（新）</td><td>{'完了' if done else '待機中'}</td>"
+                        f"<td>{detail}</td></tr>") if st.export_reserved and not st.export_lost else ""
+                empty = "" if (mine or old) else "<tr><td colspan=5>見つかりませんでした</td></tr>"
+                return self.send(200, "<ul><li>「最新を表示する」ボタンをクリック、または一定時間ごとに画面はリロードされ最新の状況が表示されます</li></ul>"
+                                      "<a href='javascript: void(0);' id=view_reload_button title=リロード "
+                                      "onclick=\"location.href='/m66w/csv_export_queues?refresh=1'\">最新を表示する</a>"
                                       "<table><tr><th>リクエスト日時</th><th>データ種別</th><th>ステータス</th><th>詳細</th></tr>"
-                                      f"<tr><td>2026/11/16 10:00:00</td><td>募集管理（新）</td><td>{'完了' if done else '待機中'}</td>"
-                                      f"<td>{detail}</td></tr></table>")
-            if u.path == "/m66w/dl/sample.csv":
+                                      + mine + old + empty + "</table>")
+            if u.path in ("/m66w/dl/sample.csv", "/m66w/dl/old.csv"):
                 self.send_response(200)
                 data = st.csv.encode("utf-8")
                 self.send_header("Content-Type", "text/csv")
@@ -83,13 +137,16 @@ def make_handler(st: State):
             if u.path == "/m66w/login":
                 ok = "pw=pw" in body
                 return self.send(302, "", location="/m66w/top" if ok else "/m66w/")
+            if u.path.startswith("/m66w/rec_recruitments/update/"):
+                st.saved = True
+                return self.send(200, "saved")
             if u.path == "/m66w/import_reserve":
                 st.import_reserved = True
                 return self.send(200, "ok")
             if u.path == "/m66w/export_reserve":
                 st.export_reserved += 1
                 st.refreshes = 0
-                return self.send(302, "", location="/m66w/reservations")
+                return self.send(200, "ok", ctype="text/plain; charset=utf-8")
             self.send(404, "not found")
     return H
 

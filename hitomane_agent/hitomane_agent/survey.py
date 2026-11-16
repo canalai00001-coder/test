@@ -4,7 +4,8 @@
 各画面の HTML・スクリーンショット・リンク一覧を output に保存し、その結果を見てボタンの押し方や CSV の形を決める。
 
 押すのは、ログイン、画面の移動、ダイアログを開く・閉じる、検索だけ。取り込み・取り下げ・掲載状態の変更はしない。
-sample（募集番号）を渡したときだけ、その1件を「ファイル取出予約」して、予約一覧から CSV の見本をダウンロードする。
+sample（募集番号）を渡したときだけ、その1件を「ファイル取出予約」して、取出ファイル一覧から CSV の見本をダウンロードする。
+予約の結果は「取込ファイル一覧」（csv_import_queues）と「取出ファイル一覧」（csv_export_queues）に出る（2026-11-16 の画面調査で確認）。
 """
 import os
 import re
@@ -14,8 +15,6 @@ from urllib.parse import urljoin
 
 from playwright.sync_api import Page, sync_playwright
 
-# 予約一覧へのリンクを探すとき、押すと予約してしまうボタンは使わない
-RESERVE_ACTIONS = ("取込予約", "取出予約")
 
 
 def _launch(p, headed: bool):
@@ -42,6 +41,7 @@ class Survey:
         self.export_poll_times = export_poll_times
         self.timeout_ms = timeout_ms
         self.steps = []
+        self.export_top = None  # 取り出し予約の前に、取出ファイル一覧のいちばん上にあった行のリクエスト日時
         self.out.mkdir(parents=True, exist_ok=True)
 
     # ---- 記録 ----
@@ -119,9 +119,11 @@ class Survey:
                 top_links = _links(page)
                 self.step_import_dialog(page, top_url)
                 jobs_links = self.step_jobs(page, top_url)
+                links = top_links + jobs_links
+                self.step_queue(page, links, "05_取込ファイル一覧", "取込ファイル一覧")
+                export_url = self.step_queue(page, links, "06_取出ファイル一覧", "取出ファイル一覧")
                 if sample:
-                    self.step_sample(page, sample)
-                self.step_reservations(page, top_links + jobs_links, top_url)
+                    self.step_sample(page, sample, top_url, export_url)
             finally:
                 browser.close()
         return self.finish()
@@ -158,65 +160,158 @@ class Survey:
             self.record(name, False, page, f"エラー: {e}")
             return []
 
-    def step_reservations(self, page: Page, links: list, top_url: str) -> None:
-        name = "05_予約一覧"
+    def step_queue(self, page: Page, links: list, name: str, title: str) -> str:
+        """「取込ファイル一覧」「取出ファイル一覧」（予約の結果が並ぶ画面）を開いて保存する。開いた URL を返す。"""
         try:
-            # 「ファイル取出予約」のような予約するボタンは除く（「…予約一覧」は除かない）
-            href = next((h for t, h in links if "予約" in t and ("一覧" in t or not any(a in t for a in RESERVE_ACTIONS))
-                         and h and not h.startswith("<")), None)
+            href = next((h for t, h in links if t.strip() == title and h and not h.startswith(("<", "#"))), None)
             if href is None:
-                self.record(name, False, page, "予約一覧へのリンクが見つかりませんでした")
-                return
+                self.record(name, False, page, f"「{title}」へのリンクが見つかりませんでした")
+                return ""
             page.goto(urljoin(page.url, href))
             page.wait_for_load_state("networkidle")
             self.save(name, page)
             self.record(name, True, page)
+            if title == "取出ファイル一覧":
+                self.export_top = self._top_key(page)
+            return page.url
         except Exception as e:
             self.record(name, False, page, f"エラー: {e}")
+            return ""
 
-    def step_sample(self, page: Page, sample: str) -> None:
-        """募集管理で sample（募集番号）を検索し、1件だけのときに「ファイル取出予約」して、予約一覧から CSV を落とす。"""
-        name = "06_取り出し予約"
+    @staticmethod
+    def _top_row(page: Page):
+        return page.locator("tr", has=page.locator("td")).first
+
+    def _top_key(self, page: Page) -> str:
+        """いちばん上の行の最初の列（リクエスト日時）。行がなければ空。"""
+        row = self._top_row(page)
+        return row.locator("td").first.inner_text().strip() if row.count() else ""
+
+    def _count(self, page: Page) -> int | None:
+        m = re.search(r"全\s*([\d,]+)\s*件", page.inner_text("body"))
+        return int(m.group(1).replace(",", "")) if m else None
+
+    def search_code(self, page: Page, code: str) -> int | None:
+        """募集管理で、項目「募集番号」・フリーワード code で検索し、件数を返す。
+        検索は Ajax で一覧だけ入れ替わる（ページは移らない）ので、件数の表示が変わるか入力欄が使えるようになるまで待つ。"""
+        box = page.locator("#search_freeword")
+        if not box.count():
+            return None
+        box.fill(code)
+        field = page.locator("#search_recruitments")
+        if field.count():
+            field.select_option("code")
+        before = self._count(page)
+        # 検索欄の見出しにも「検索」の文字があるので、文字ではなくボタンの class で押す
+        button = page.locator("a.btn_search_btn02")
+        if not button.count():
+            button = page.get_by_role("link", name="検索", exact=True)
+        button.first.click()
+        deadline = time.time() + self.timeout_ms / 1000
+        while time.time() < deadline:
+            page.wait_for_timeout(500)
+            if box.is_enabled() and self._count(page) != before:
+                break
+        page.wait_for_load_state("networkidle")
+        return self._count(page)
+
+    def pick_code(self, page: Page) -> str:
+        """募集管理の一覧のいちばん上の原稿の「詳細を開く」を開き、募集番号を読む（一覧には募集番号の列がない）。
+        詳細画面は読むだけで、保存などのボタンは押さない。"""
+        name = "07_見本の原稿"
+        link = page.locator("a.btn_list_btn02[href*='/edit/']")
+        if not link.count():
+            link = page.locator("a[title='詳細を開く']")
+        if not link.count():
+            self.save(name, page)
+            self.record(name, False, page, "一覧に「詳細を開く」が見つかりませんでした（--sample 募集番号 で指定してください）")
+            return ""
+        page.goto(urljoin(page.url, link.first.get_attribute("href")))
+        page.wait_for_load_state("networkidle")
+        self.save(name, page)
+        code = page.evaluate("""() => {
+            const named = document.querySelector("input[name$='[code]']");
+            if (named && named.value.trim()) return named.value.trim();
+            for (const h of document.querySelectorAll('th, label, dt')) {
+                if (!h.textContent.trim().startsWith('募集番号')) continue;
+                const box = h.closest('tr') || h.parentElement;
+                const input = box && box.querySelector('input[type=text], input:not([type])');
+                if (input && input.value.trim()) return input.value.trim();
+                const cell = h.nextElementSibling;
+                if (cell && cell.textContent.trim()) return cell.textContent.trim().split(/\s+/)[0];
+            }
+            return '';
+        }""")
+        if not code:
+            self.record(name, False, page, "詳細画面で募集番号を読めませんでした（--sample 募集番号 で指定してください）")
+            return ""
+        self.record(name, True, page, f"募集番号 {code} を見本に使います")
+        return code
+
+    def step_sample(self, page: Page, sample: str, top_url: str, export_url: str) -> None:
+        """募集管理で sample（募集番号）を検索し、1件だけのときに「ファイル取出予約」して、取出ファイル一覧から CSV を落とす。"""
+        name = "08_取り出し予約"
         try:
-            box = page.locator("input[type=text]")
-            if not box.count():
-                self.save(name, page)
-                self.record(name, False, page, "フリーワードの入力欄が見つかりませんでした")
+            page.goto(top_url)
+            if not self.click_text(page, "募集管理"):
+                self.record(name, False, page, "「募集管理」が見つかりませんでした")
                 return
-            box.first.fill(sample)
-            search = page.get_by_role("button", name="検索", exact=True)
-            if not search.count():
-                search = page.get_by_text("検索", exact=True)
-            search.first.click()
-            page.wait_for_load_state("networkidle")
-            m = re.search(r"全\s*([\d,]+)\s*件", page.inner_text("body"))
-            hits = int(m.group(1).replace(",", "")) if m else None
+            if sample == "auto":
+                sample = self.pick_code(page)
+                if not sample:
+                    return
+                page.goto(top_url)
+                self.click_text(page, "募集管理")
+            hits = self.search_code(page, sample)
             if hits != 1:
                 self.save(name, page)
                 self.record(name, False, page, f"「{sample}」の検索結果が {hits if hits is not None else '?'}件 のため取り出しません"
                                                "（1件だけのときに取り出します）")
                 return
-            if not self.click_text(page, "ファイル取出予約"):
+            button = page.locator("a[onclick*='export_bg_csv']")
+            if not button.count():
+                button = page.get_by_role("link", name="ファイル取出予約", exact=True)
+            if not button.count():
                 self.save(name, page)
                 self.record(name, False, page, "「ファイル取出予約」が見つかりませんでした")
                 return
-            page.wait_for_timeout(1000)
+            messages = []
+
+            def answer(d):  # 取り出しの確認ダイアログだけ「OK」で進める（この画面で開くのはこれだけ）
+                messages.append(d.message)
+                d.accept()
+            page.on("dialog", answer)
+            try:
+                button.first.click()
+                page.wait_for_timeout(2000)
+                page.wait_for_load_state("networkidle")
+            finally:
+                page.remove_listener("dialog", answer)
             self.save(name, page)
-            self.record(name, True, page)
+            self.record(name, True, page, " / ".join(messages))
         except Exception as e:
             self.record(name, False, page, f"エラー: {e}")
             return
+        if not export_url:
+            self.record("09_取り出しファイル", False, page, "取出ファイル一覧の場所が分からないため、ダウンロードできません")
+            return
+        page.goto(export_url)
+        page.wait_for_load_state("networkidle")
         self.step_download(page)
 
     def step_download(self, page: Page) -> None:
-        """予約一覧のいちばん上の行が「完了」になるまで「最新を表示する」を押して待ち、取出しファイルを落とす。"""
-        name = "07_取り出しファイル"
+        """取出ファイル一覧のいちばん上の行が「完了」になるまで「最新を表示する」を押して待ち、取出しファイルを落とす。"""
+        name = "09_取り出しファイル"
         started = time.time()
         try:
             for i in range(self.export_poll_times + 1):
-                row = page.locator("tr", has=page.locator("td")).first
-                if row.count() and "完了" in row.inner_text():
+                row = self._top_row(page)
+                # 前からあった行（ほかの人や前回の取り出し）を、今回の見本と取り違えない
+                new = row.count() and (self.export_top is None or self._top_key(page) != self.export_top)
+                if new and "完了" in row.inner_text():
                     link = row.locator("a", has_text=".csv")
+                    if not link.count():
+                        link = row.locator("a[href*='csv'], a[href*='download']")
                     if link.count():
                         with page.expect_download() as d:
                             link.first.click()
@@ -227,7 +322,10 @@ class Survey:
                 if i == self.export_poll_times:
                     break
                 time.sleep(self.poll_interval)
-                refresh = page.get_by_text("最新を表示する")
+                # 「最新を表示する」の文字は画面上の注意書きにもあるので、ボタンは id で押す
+                refresh = page.locator("#view_reload_button")
+                if not refresh.count():
+                    refresh = page.get_by_role("link", name="最新を表示する", exact=True)
                 if refresh.count():
                     refresh.first.click()
                     page.wait_for_load_state("networkidle")
