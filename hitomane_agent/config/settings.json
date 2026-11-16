@@ -1,0 +1,19 @@
+{
+  "_説明": "ヒトマネ入稿ツールの設定。各自の値は settings.local.json に書く（同じ項目を上書きする。GitHub には上げない）。",
+  "spreadsheet_id": "1sDLw8aMXmkQi9Uy4fhQMf3g4GqKhh7fd8TJEIWe1DzA",
+  "_spreadsheet_id_説明": "【AI用】ヒトマネ 求人原稿自動生成。原本は読まない・書かない。",
+  "output_sheet_prefix": "ヒトマネ出力_",
+  "service_account_file": "service_account.json",
+  "login_spreadsheet_id": "1nPk9AG7wePhszTO4bcN8Rs_gFNJKjlj0YAFanz9ggK4",
+  "_login_spreadsheet_id_説明": "ログイン情報シートのあるスプレッドシート（Q-mate の通勤用と同じ）。",
+  "accounts_sheet": "Q-mateログイン情報",
+  "login_company": "ヒトマネ",
+  "hitomane": {
+    "base_url": "https://kanri.hitomgr.jp/m66w/",
+    "timeout_ms": 60000,
+    "poll_interval_ms": 5000,
+    "export_poll_times": 360
+  },
+  "_csv_説明": "取り込む CSV の文字コードと改行。画面調査で取り出した見本を見て直す。",
+  "csv": {"encoding": "utf-8", "newline": "\r\n"}
+}
