@@ -138,7 +138,12 @@ class Survey:
                 return
             page.wait_for_timeout(1000)
             self.save(name, page)
-            self.record(name, True, page)
+            # ダイアログの中身（ファイル選択欄・取込予約のボタン）は iframe の別ページなので、その HTML も保存する。読むだけで押さない
+            inner = next((f for f in page.frames if "csv_items" in f.url or "select_new_format" in f.url), None)
+            if inner is not None:
+                inner.wait_for_load_state()
+                (self.out / f"{name}_中身.html").write_text(inner.content(), encoding="utf-8")
+            self.record(name, True, page, "" if inner is not None else "ダイアログの中身（iframe）は見つかりませんでした")
             close = page.get_by_text("閉じる", exact=True)
             if close.count() and close.first.is_visible():
                 close.first.click()

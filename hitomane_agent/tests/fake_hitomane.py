@@ -88,9 +88,16 @@ def make_handler(st: State):
                          "<a href=/m66w/csv_export_queues>取出ファイル一覧</a>") if st.reserve_link else ""
                 return self.send(200, "<h2>募集情報を管理する</h2><a href=/m66w/rec_recruitments>募集管理</a>"
                                       "<button id=imp onclick=\"document.getElementById('dlg').style.display='block'\">ファイルを取込む</button>"
-                                      "<div id=dlg style='display:none'>募集情報のファイルを取り込む（新フォーマット）"
-                                      "<input type=file name=f><button onclick=\"fetch('/m66w/import_reserve',{method:'POST'})\">ファイル取込予約</button>"
+                                      # 実物は、ダイアログの中身を iframe（select_new_format）で表示する
+                                      "<div id=dlg style='display:none'><iframe class=cboxIframe "
+                                      "src=/m66w/rec_recruitment_csv_items/select_new_format></iframe>"
                                       "<button onclick=\"document.getElementById('dlg').style.display='none'\">閉じる</button></div>" + links)
+            if u.path == "/m66w/rec_recruitment_csv_items/select_new_format":
+                return self.send(200, "募集情報のファイルを取り込む（新フォーマット）"
+                                      "<form method=post action=/m66w/import_reserve enctype=multipart/form-data>"
+                                      "<input type=file name=f><label><input type=checkbox name=no_overwrite>"
+                                      "既存原稿と同じ募集番号の原稿を上書きせずに取り込む</label>"
+                                      "<button type=submit>ファイル取込予約</button></form>")
             if u.path == "/m66w/rec_recruitments":
                 return self.send(200, JOBS)
             if u.path == "/m66w/rec_recruitments/edit/573038":

@@ -17,6 +17,6 @@
     "poll_interval_ms": 5000,
     "export_poll_times": 360
   },
-  "_csv_説明": "取り込む CSV の文字コードと改行。画面調査で取り出した見本を見て直す。",
-  "csv": {"encoding": "utf-8", "newline": "\r\n"}
+  "_csv_説明": "取り込む CSV の文字コードと改行。取り出した CSV（2026-11-16 の画面調査）と同じにする：Shift_JIS（cp932）・BOM なし・改行 CRLF（セルの中の改行も CRLF）・必要なときだけ \"\" で囲む。見出しは新FMT(テンプレ)の192列と同じ。",
+  "csv": {"encoding": "cp932", "newline": "\r\n"}
 }

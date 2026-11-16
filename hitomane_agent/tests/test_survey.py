@@ -36,7 +36,10 @@ class TestSurvey(Base):
         for f in self.out.iterdir():
             if f.suffix in (".html", ".txt"):
                 self.assertNotIn("pw=pw", f.read_text(encoding="utf-8"))
-        self.assertIn("ファイルを取り込む", (self.out / "03_ファイル取込ダイアログ.html").read_text(encoding="utf-8"))
+        # ダイアログの中身は iframe なので、その中身も別に保存する
+        inner = (self.out / "03_ファイル取込ダイアログ_中身.html").read_text(encoding="utf-8")
+        self.assertIn("既存原稿と同じ募集番号", inner)
+        self.assertIn("type=\"file\"", inner)
 
     def test_wrong_password_stops(self):
         self.info["password"] = "ng"
