@@ -51,9 +51,15 @@
 
 cp932 で表せない文字（絵文字や一部の漢字）は CSV に書けない。入稿前のチェックで見つけて止める必要がある。
 
+## 取込ダイアログの中身（iframe の select_new_format）
+
+- フォーム：`#rec_form`（`multipart/form-data`、送り先 `rec_recruitment_csv_items/complete_new_format`、hidden `format_name=newhmgrfrm`）
+- ファイル選択：`#file_csv`（name `file[csv]`）
+- 「既存原稿と同じ募集番号の原稿を上書きせずに取り込む」：`#duplicate_check_term`。**外したまま**（同じ募集番号は上書き）
+- 「ファイル取込予約」：`a.btn_operation_btn02`（`queue_import()`）
+- 閉じる：`a.hito_sub_close`
+
 ## まだ分かっていないこと
 
-- 取込ダイアログの中身（ファイル選択欄の name、「上書きせずに取り込む」のチェック欄、「ファイル取込予約」のボタン）。
-  iframe の中身も保存するように画面調査を直した。次の画面調査で `03_ファイル取込ダイアログ_中身.html` に入る。
 - 取り込みの完了・エラーが、取込ファイル一覧にどう出るか。第2段階で、テスト用の原稿1件を取り込んで確かめる。
 - 取出予約の確認ダイアログの文言（記録はしているが、今回の結果には残っていない）。
