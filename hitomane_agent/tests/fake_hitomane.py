@@ -111,16 +111,18 @@ def make_handler(st: State):
                     st.refreshes += 1
                 done = st.export_ready_after >= 0 and st.refreshes >= st.export_ready_after
                 detail = "取出しファイル: <a href=/m66w/dl/sample.csv>rec_jobs_sample.csv</a> 全1件" if done else "実行までしばらくお待ち下さい"
-                old = ("<tr><td>2026/11/15 09:00:00</td><td>募集管理（新）</td><td>完了</td>"
+                old = ("<tr class=record><td>2026/11/15 09:00:00</td><td>募集管理（新）</td><td>完了</td>"
                        "<td>取出しファイル: <a href=/m66w/dl/old.csv>rec_jobs_old.csv</a> 全50000件</td></tr>") if st.old_done_row else ""
-                mine = (f"<tr><td>2026/11/16 10:00:00</td><td>募集管理（新）</td><td>{'完了' if done else '待機中'}</td>"
+                mine = (f"<tr class=record><td>2026/11/16 10:00:00</td><td>募集管理（新）</td><td>{'完了' if done else '待機中'}</td>"
                         f"<td>{detail}</td></tr>") if st.export_reserved and not st.export_lost else ""
-                empty = "" if (mine or old) else "<tr><td colspan=5>見つかりませんでした</td></tr>"
+                # 実物は、件数があっても「見つかりませんでした」の行が tbody.messages に残っている（見えないだけ）
+                empty = ("<tbody class=messages><tr><td colspan=5><p class=empty-message"
+                         f"{' style=display:none' if (mine or old) else ''}>見つかりませんでした</p></td></tr></tbody>")
                 return self.send(200, "<ul><li>「最新を表示する」ボタンをクリック、または一定時間ごとに画面はリロードされ最新の状況が表示されます</li></ul>"
                                       "<a href='javascript: void(0);' id=view_reload_button title=リロード "
                                       "onclick=\"location.href='/m66w/csv_export_queues?refresh=1'\">最新を表示する</a>"
                                       "<table><tr><th>リクエスト日時</th><th>データ種別</th><th>ステータス</th><th>詳細</th></tr>"
-                                      + mine + old + empty + "</table>")
+                                      + empty + "<tbody class=records>" + mine + old + "</tbody></table>")
             if u.path in ("/m66w/dl/sample.csv", "/m66w/dl/old.csv"):
                 self.send_response(200)
                 data = st.csv.encode("utf-8")

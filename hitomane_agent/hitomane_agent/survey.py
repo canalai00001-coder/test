@@ -180,7 +180,12 @@ class Survey:
 
     @staticmethod
     def _top_row(page: Page):
-        return page.locator("tr", has=page.locator("td")).first
+        # 一覧の行は tbody.records の tr.record。表の先頭には「見つかりませんでした」の行（tbody.messages）が
+        # 件数があっても見えない状態で残っているので、それを行として見ない
+        rows = page.locator("tbody.records tr.record")
+        if rows.count():
+            return rows.first
+        return page.locator("tbody.records tr", has=page.locator("td")).first
 
     def _top_key(self, page: Page) -> str:
         """いちばん上の行の最初の列（リクエスト日時）。行がなければ空。"""
