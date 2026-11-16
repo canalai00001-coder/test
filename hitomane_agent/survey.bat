@@ -1,5 +1,6 @@
 @echo off
 rem Survey the HITO-Manager admin screens (no upload, no takedown). Usage: survey.bat [--sample [JOB_NO]] [--headed]
+rem Double-click (no arguments) = --sample : also export one job as a CSV sample.
 cd /d "%~dp0"
 if not exist service_account.json if exist ..\qmate_agent\service_account.json copy ..\qmate_agent\service_account.json service_account.json >nul
 if exist ..\qmate_agent\.venv\Scripts\activate.bat (
@@ -14,5 +15,9 @@ if exist ..\qmate_agent\.venv\Scripts\activate.bat (
     call .venv\Scripts\activate.bat
   )
 )
-python -m hitomane_agent survey %*
+if "%~1"=="" (
+  python -m hitomane_agent survey --sample
+) else (
+  python -m hitomane_agent survey %*
+)
 pause
