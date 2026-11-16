@@ -4,6 +4,7 @@
   - 出力シート（ヒトマネ出力_…）の一覧と、チェック・入稿の状態を見る
   - チェック：シートを読んでチェックし、結果（report.html）を開く
   - 入稿：止める条件と、募集管理の全件数を確かめてから、ヒトマネに取り込む（裏で upload コマンドを動かし、出力を画面に出す）
+  - 取り下げ：掲載開始日の期間を入れて「確認だけ」で件数を見てから、「取り下げる」（今日・同じ条件の確認のファイルを使う）
   - 更新：GitHub に新しい版があるかを確かめ、ボタン1つで最新にする
 """
 import html
@@ -105,6 +106,35 @@ class App:
         return {"ok": True, "rows": len(ms.rows), "status": rv["status"],
                 "note": workflow.total_note(total, len(ms.rows), config.load("rules.json"))}
 
+    # ---- 取り下げ ----
+    def _login_id(self) -> str:
+        from . import accounts
+        return accounts.login_info(self._settings())["login_id"]
+
+    def takedown_args(self, body: dict) -> tuple[str, list[str]]:
+        """「確認だけ」はいつでも、「取り下げる」は今日・同じ条件の「確認だけ」があるときだけ。"""
+        from datetime import date
+
+        from . import takedown
+        cond = takedown.Conditions(takedown.parse_day(body["from"]), takedown.parse_day(body["to"]))
+        if cond.start_from > cond.start_to:
+            raise ValueError("期間の「から」が「まで」より後です")
+        args = ["takedown", "--from", f"{cond.start_from:%Y/%m/%d}", "--to", f"{cond.start_to:%Y/%m/%d}"]
+        if body.get("prepare_only"):
+            return f"取り下げの確認：{cond.describe()}", args + ["--prepare-only"]
+        p = takedown.find_prepared(self._login_id(), cond, date.today())
+        if not p:
+            raise RuntimeError("先に、同じ期間で「確認だけ」をしてください（今日のもの）")
+        if not p["rows"]:
+            raise RuntimeError("取り下げる原稿がありません")
+        return f"取り下げ：{cond.describe()}（{p['rows']}件）", args + ["--yes"]
+
+    def prepared(self) -> list[dict]:
+        from datetime import date
+
+        from . import takedown
+        return takedown.prepared_list(date.today())
+
     def report(self, name: str) -> bytes:
         path = (config.OUTPUT_DIR / name / "report.html").resolve()
         if config.OUTPUT_DIR.resolve() not in path.parents or not path.exists():
@@ -185,6 +215,13 @@ th{background:#f6f8fa}button{padding:4px 12px;margin-right:4px;cursor:pointer}
 <h2>出力シート <button onclick="loadSheets()">一覧を読み直す</button></h2>
 <table><thead><tr><th>シート</th><th>原稿</th><th>チェック</th><th>入稿</th><th></th></tr></thead><tbody id=sheets>
 <tr><td colspan=5>読み込み中…</td></tr></tbody></table>
+<h2>取り下げ</h2>
+<p>掲載開始日がこの期間の、掲載中の原稿を取り下げます（開始日・終了日を2年前、ステータスを非掲載にして取り込み直します）。
+先に「確認だけ」で件数を見てから、「取り下げる」を押してください。</p>
+<p>掲載開始日 <input id=tdFrom placeholder="2026/10/01" size=12> 〜 <input id=tdTo placeholder="2026/10/31" size=12>
+<button onclick="takedown(true)">確認だけ</button> <button onclick="takedown(false)">取り下げる</button></p>
+<table><thead><tr><th>今日の確認</th><th>検索の件数</th><th>取り下げる原稿</th><th>除いた原稿</th><th>確認した時刻</th></tr></thead>
+<tbody id=prepared></tbody></table>
 <h2>実行の記録</h2><div id=log></div>
 <h2>更新</h2><p><button onclick="checkUpdate()">新しい版を確かめる</button> <span id=upd></span></p>
 <script>
@@ -228,8 +265,24 @@ function follow(since) {
     if (since === 0) log.textContent = "■ " + j.title + "\\n";
     log.textContent += j.lines.map(l => l + "\\n").join(""); log.scrollTop = log.scrollHeight;
     if (j.running) setTimeout(() => follow(j.next), 1500);
-    else { log.textContent += j.code === 0 ? "\\n終わりました\\n" : "\\n止まりました（上の記録を見てください）\\n"; loadSheets(); }
+    else { log.textContent += j.code === 0 ? "\\n終わりました\\n" : "\\n止まりました（上の記録を見てください）\\n"; loadSheets(); loadPrepared(); }
   });
+}
+function loadPrepared() {
+  api("/api/takedown/prepared").then(list => {
+    document.getElementById("prepared").innerHTML = list.length ? list.map(p => `<tr><td>${esc(p.conditions)}</td>
+      <td>${p.searched}件</td><td>${p.rows}件</td>
+      <td>${esc(Object.entries(p.skipped || {}).map(([k, v]) => k + " " + v + "件").join("、"))}</td>
+      <td>${esc(p.prepared_at)}</td></tr>`).join("") : "<tr><td colspan=5>まだありません</td></tr>";
+  });
+}
+function takedown(prepareOnly) {
+  const from = document.getElementById("tdFrom").value.trim(), to = document.getElementById("tdTo").value.trim();
+  if (!from || !to) { say("掲載開始日の期間を入れてください"); return; }
+  if (!prepareOnly && !confirm(`掲載開始日 ${from}〜${to} の掲載中の原稿を取り下げます。\\n\\n` +
+      "「今日の確認」の件数を確かめましたか？取り下げますか？")) return;
+  say("");
+  api("/api/takedown", {from, to, prepare_only: prepareOnly}).then(() => follow(0)).catch(e => say(e.message));
 }
 function checkUpdate() {
   const u = document.getElementById("upd"); u.textContent = "確かめています…";
@@ -242,6 +295,7 @@ function checkUpdate() {
   }).catch(e => u.textContent = "確かめられませんでした: " + e.message);
 }
 loadSheets();
+loadPrepared();
 </script></body></html>"""
 
 
@@ -279,6 +333,8 @@ def make_handler(app: App):
                     return self._send(200, app.report(q.get("name", [""])[0]), "text/html; charset=utf-8")
                 if u.path == "/api/update":
                     return self._send(200, app.update_info())
+                if u.path == "/api/takedown/prepared":
+                    return self._send(200, app.prepared())
             except Exception as e:
                 return self._send(500, {"error": html.escape(str(e))})
             self._send(404, {"error": "not found"})
@@ -299,6 +355,8 @@ def make_handler(app: App):
                     if problem:
                         raise RuntimeError(problem)
                     return self._send(200, app.run(f"入稿：{name}", ["upload", "--sheet", name, "--yes"]))
+                if u.path == "/api/takedown":
+                    return self._send(200, app.run(*app.takedown_args(body)))
                 if u.path == "/api/update/github":
                     return self._send(200, app.update_from_github())
             except Exception as e:

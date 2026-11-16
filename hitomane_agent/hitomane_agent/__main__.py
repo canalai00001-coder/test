@@ -4,10 +4,12 @@
   python -m hitomane_agent list                                         出力シートの一覧とチェックの状態
   python -m hitomane_agent check (--sheet 名前 | --csv パス)            入稿前のチェック
   python -m hitomane_agent upload (--sheet 名前 | --csv パス) [--yes] [--dry-run]   ヒトマネに取り込む
+  python -m hitomane_agent takedown --from 2026/10/01 --to 2026/10/31 [--prepare-only] [--yes]   取り下げ
 """
 import argparse
 import sys
 from datetime import datetime
+from pathlib import Path
 
 from . import accounts, config, workflow
 
@@ -108,6 +110,75 @@ def cmd_upload(args) -> int:
     return 0 if ok else 2
 
 
+def cmd_takedown(args) -> int:
+    """掲載開始日の期間の掲載中の原稿を、開始日・終了日を2年前・非掲載にして取り込み直す。"""
+    from datetime import date
+
+    from . import takedown
+    from .csv_export import read_csv
+    from .exporter import HitomaneExporter
+    from .uploader import HitomaneUploader
+
+    settings, rules = _settings(args), config.load("rules.json")
+    try:
+        cond = takedown.Conditions(takedown.parse_day(args.date_from), takedown.parse_day(args.date_to))
+    except ValueError as e:
+        print(e)
+        return 1
+    if cond.start_from > cond.start_to:
+        print("期間の「から」が「まで」より後です")
+        return 1
+    info = accounts.login_info(settings)
+    today = date.today()
+    prepared = None if args.prepare_only else takedown.find_prepared(info["login_id"], cond, today)
+    print(f"アカウント: {info['login_id']}\n条件: {cond.describe()}")
+    if prepared:
+        print(f"今日の「確認だけ」（{prepared['prepared_at']}）のファイルを使います（取り出しは省きます）")
+    else:
+        out = config.OUTPUT_DIR / f"取り下げ_{today:%Y%m%d}_{cond.label()}"
+        res = HitomaneExporter(info, settings["hitomane"], out, headed=args.headed).export(cond, out / "取り出し.csv")
+        if not res["file"]:
+            print("条件に合う原稿はありません。取り下げるものはありません")
+            return 0
+        rw = takedown.rewrite(read_csv(Path(res["file"]).read_bytes(), "取り出し"), cond, res["branch"], today)
+        files = []
+        from .csv_export import split_rows, to_csv_bytes
+        for n, part in enumerate(split_rows(rw.manuscript, rules["max_rows_per_file"]), start=1):
+            f = out / f"取り下げ_{n}.csv"
+            f.write_bytes(to_csv_bytes(part, **settings["csv"]))
+            files.append(str(f))
+        prepared = {"searched": res["count"], "rows": len(rw.manuscript.rows), "skipped": rw.skipped,
+                    "new_date": rw.new_date, "branch": res["branch"], "files": files if rw.manuscript.rows else []}
+        takedown.save_prepared(info["login_id"], cond, prepared, today)
+    b = prepared["branch"]
+    print(f"拠点: {b['name']}（{b['code']}）\n検索の件数: {prepared['searched']}件\n取り下げる原稿: {prepared['rows']}件")
+    for reason, n in prepared["skipped"].items():
+        print(f"  除いた原稿（{reason}）: {n}件")
+    print(f"書き換え: 開始日・終了日 → {prepared['new_date']}、ステータス → 非掲載")
+    print("ファイル: " + "、".join(prepared["files"]))
+    if args.prepare_only:
+        print("確認だけのため、取り込んでいません。取り下げるときは --prepare-only を付けずに実行してください（今日のうちならこのファイルを使います）")
+        return 0
+    if not prepared["rows"]:
+        print("取り下げる原稿がありません")
+        return 0
+    if not args.yes and input(f"{prepared['rows']}件を取り下げますか？ [y/N] > ").strip().lower() != "y":
+        print("中止しました")
+        return 1
+    out_dir = Path(prepared["files"][0]).parent
+    results = HitomaneUploader(info, settings["hitomane"], out_dir, headed=args.headed).upload(
+        [Path(f) for f in prepared["files"]])
+    ok = len(results) == len(prepared["files"]) and all(r.ok for r in results)
+    takedown.record({"login_id": info["login_id"], "conditions": cond.describe(), "rows": prepared["rows"], "ok": ok,
+                     "results": [{"file": r.file, "ok": r.ok, "message": r.message, "row": r.row_text} for r in results]})
+    for r in results:
+        print(f"{'成功' if r.ok else '失敗'}: {r.file} {r.message}\n  {r.row_text}")
+    if len(results) < len(prepared["files"]):
+        print(f"失敗したため、残りの {len(prepared['files']) - len(results)} ファイルは取り込んでいません")
+    print("取り下げました" if ok else "取り下げは途中で止まりました。取込ファイル一覧を確かめてください")
+    return 0 if ok else 2
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="hitomane_agent")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -132,6 +203,15 @@ def main(argv=None) -> int:
             s.add_argument("--dry-run", action="store_true", help="CSV を作るところまで（取り込まない）")
             s.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
         s.set_defaults(func=func)
+
+    s = sub.add_parser("takedown", help="掲載開始日の期間の掲載中の原稿を取り下げる（開始日・終了日を2年前・非掲載にして取り込み直す）")
+    s.add_argument("--from", dest="date_from", required=True, help="掲載開始日の期間の初め（2026/10/01 の形）")
+    s.add_argument("--to", dest="date_to", required=True, help="掲載開始日の期間の終わり（2026/10/31 の形）")
+    s.add_argument("--prepare-only", action="store_true", help="確認だけ：取り出して件数を見る（取り込まない）")
+    s.add_argument("--yes", action="store_true", help="確認を聞かずに取り下げる")
+    s.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
+    s.add_argument("--user", help="使うログインID（省略時は settings の login_user）")
+    s.set_defaults(func=cmd_takedown)
     args = ap.parse_args(argv)
     return args.func(args)
 

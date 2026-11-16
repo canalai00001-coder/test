@@ -10,6 +10,7 @@ import csv
 import io
 import re
 import threading
+from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -37,6 +38,11 @@ class State:
         # 終わった行の詳細。None なら実物（2026-11-16 に1件取り込んだとき）と同じ「成功: N件 （8秒）」（N は CSV の行数）
         self.import_detail = None
         self.csv = "﻿募集番号,ステータス,開始日,終了日\r\nCB93208,掲載,2026/08/17,2027/08/17\r\n"
+        # 取り下げのテスト用：募集管理にある原稿（新フォーマットの {列: 値}）。None なら上の csv を取り出す
+        self.jobs = None
+        self.branches = [("ダミーエリア", "B001", "-", "CB株式会社")]  # 拠点の一覧の行
+        self.last_filter = None   # 最後の検索の条件（日付の検索）
+        self.export_csv = None    # 取出予約したときの CSV（cp932）
 
 
 JOBS = """<div class=title>検索</div>
@@ -44,6 +50,12 @@ JOBS = """<div class=title>検索</div>
 <input type=text name=search id=search_freeword>
 <select name=search_recruitments id=search_recruitments><option value="">全ての項目</option><option value=m_branch>会社名</option>
 <option value=code>募集番号</option></select>
+掲載開始日<input id=posted_start_from type=text>
+<input type=hidden id=posted_start_from_year name="posted_start_from[year]"><input type=hidden id=posted_start_from_month name="posted_start_from[month]">
+<input type=hidden id=posted_start_from_day name="posted_start_from[day]">～<input id=posted_start_to type=text>
+<input type=hidden id=posted_start_to_year name="posted_start_to[year]"><input type=hidden id=posted_start_to_month name="posted_start_to[month]">
+<input type=hidden id=posted_start_to_day name="posted_start_to[day]">
+<input type=checkbox value=1 name="search_condition[posted_only]" id=search_condition_posted_only>掲載のみ
 <a href=# class="btn_search_btn01" onclick="return false;">クリア</a>
 <a href=# class="btn_search_btn02 hito_enterkey" onclick="doSearch();return false;">検索</a></form>
 <div id=as_rec_recruitments-content><div class=count>全{total}件</div>
@@ -58,6 +70,13 @@ JOBS = """<div class=title>検索</div>
 function doSearch() {
   var w = document.getElementById('search_freeword'), f = document.getElementById('search_recruitments');
   var qs = 'search=' + encodeURIComponent(w.value) + '&search_recruitments=' + encodeURIComponent(f.value);
+  // 実物と同じく、日付は隠れた欄（年・月・日）が送られる（画面の入力欄は送られない）
+  ['posted_start_from', 'posted_start_to'].forEach(function (k) {
+    ['year', 'month', 'day'].forEach(function (p) {
+      qs += '&' + k + '_' + p + '=' + encodeURIComponent(document.getElementById(k + '_' + p).value);
+    });
+  });
+  if (document.getElementById('search_condition_posted_only').checked) qs += '&posted_only=1';
   w.disabled = true;
   setTimeout(function () {
     fetch('/m66w/rec_recruitments/update_table?' + qs).then(function (r) { return r.text(); }).then(function (t) {
@@ -129,7 +148,24 @@ def make_handler(st: State):
                 word, field = q.get("search", [""])[0], q.get("search_recruitments", [""])[0]
                 st.last_search = (word, field)
                 n = st.hits if word else 50000
+                if st.jobs is not None:
+                    def day(k):
+                        y, m, d = (q.get(f"{k}_{p}", [""])[0] for p in ("year", "month", "day"))
+                        return date(int(y), int(m), int(d)) if y else None
+                    lo, hi, only = day("posted_start_from"), day("posted_start_to"), bool(q.get("posted_only"))
+                    st.last_filter = (lo, hi, only)
+
+                    def hit(j):
+                        s = date(*map(int, j["開始日"].split("/")))
+                        return ((lo is None or s >= lo) and (hi is None or s <= hi)
+                                and (not only or j["ステータス"] == "掲載"))
+                    n = sum(1 for j in st.jobs if hit(j))
+                    st.export_rows = [j for j in st.jobs if hit(j)]
                 return self.send(200, f"<div class=count>全{n}件</div>", ctype="text/plain; charset=utf-8")
+            if u.path == "/m66w/m_branches":
+                rows = "".join("<tr class=record>" + "".join(f"<td>{c}</td>" for c in b) + "</tr>" for b in st.branches)
+                return self.send(200, f"<div>全{len(st.branches)}件</div><table><tbody class=messages><tr><td>見つかりませんでした"
+                                      f"</td></tr></tbody><tbody class=records>{rows}</tbody></table>")
             if u.path == "/m66w/csv_import_queues":
                 if q.get("refresh"):
                     st.import_refreshes += 1
@@ -177,7 +213,7 @@ def make_handler(st: State):
                                       + empty + "<tbody class=records>" + mine + old + "</tbody></table>")
             if u.path in ("/m66w/dl/sample.csv", "/m66w/dl/old.csv"):
                 self.send_response(200)
-                data = st.csv.encode("utf-8")
+                data = st.export_csv if (st.export_csv is not None and u.path.endswith("sample.csv")) else st.csv.encode("utf-8")
                 self.send_header("Content-Type", "text/csv")
                 self.send_header("Content-Disposition", "attachment; filename=rec_jobs_sample.csv")
                 self.send_header("Content-Length", str(len(data)))
@@ -210,6 +246,12 @@ def make_handler(st: State):
             if u.path == "/m66w/export_reserve":
                 st.export_reserved += 1
                 st.refreshes = 0
+                if st.jobs is not None:  # 最後の検索の結果を、実物と同じ形の CSV（cp932）にする
+                    from hitomane_agent.checks import Manuscript
+                    from hitomane_agent.csv_export import to_csv_bytes
+                    from hitomane_agent.headers import NEW_FORMAT
+                    rows = getattr(st, "export_rows", st.jobs)
+                    st.export_csv = to_csv_bytes(Manuscript("x", [NEW_FORMAT] + [[j[h] for h in NEW_FORMAT] for j in rows]))
                 return self.send(200, "ok", ctype="text/plain; charset=utf-8")
             self.send(404, "not found")
     return H

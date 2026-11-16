@@ -114,6 +114,38 @@ class TestApp(unittest.TestCase):
         run.assert_called_once_with("入稿：ヒトマネ出力_A", ["upload", "--sheet", "ヒトマネ出力_A", "--yes"])
 
 
+class TestTakedownGate(TestApp):
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(app_mod.App, "_login_id", return_value="Minami")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_prepare_only_is_always_allowed(self):
+        title, args = self.app.takedown_args({"from": "2026/10/01", "to": "2026/10/31", "prepare_only": True})
+        self.assertEqual(args, ["takedown", "--from", "2026/10/01", "--to", "2026/10/31", "--prepare-only"])
+
+    def test_takedown_needs_prepare_today(self):
+        with self.assertRaises(RuntimeError) as e:
+            self.app.takedown_args({"from": "2026/10/01", "to": "2026/10/31"})
+        self.assertIn("確認だけ", str(e.exception))
+        from datetime import date
+        from hitomane_agent import takedown
+        f = config.OUTPUT_DIR / "t.csv"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"x")
+        cond = takedown.Conditions(date(2026, 10, 1), date(2026, 10, 31))
+        takedown.save_prepared("Minami", cond, {"rows": 2, "files": [str(f)], "searched": 2, "skipped": {}}, date.today())
+        title, args = self.app.takedown_args({"from": "2026/10/1", "to": "2026/10/31"})
+        self.assertEqual(args[-1], "--yes")
+        self.assertIn("2件", title)
+        self.assertEqual(len(self.app.prepared()), 1)
+
+    def test_bad_range(self):
+        with self.assertRaises(ValueError):
+            self.app.takedown_args({"from": "2026/10/31", "to": "2026/10/01", "prepare_only": True})
+
+
 class TestApplyZip(unittest.TestCase):
     def test_keeps_local_files(self):
         root = Path(tempfile.mkdtemp())
