@@ -64,5 +64,36 @@ class TestSurvey(Base):
         self.assertEqual(self.st.export_reserved, 0)
 
 
+
+class TestSample(Base):
+    def run_sample(self, **kw):
+        return self.run_it(sample="CB93208", poll_interval_ms=10, **kw)
+
+    def test_sample_export_downloads_csv(self):
+        res = self.run_sample()
+        self.assertTrue(self.step(res, "06_取り出し予約")["ok"], res["steps"])
+        self.assertTrue(self.step(res, "07_取り出しファイル")["ok"], res["steps"])
+        self.assertEqual((self.out / "取り出し見本.csv").read_bytes(), self.st.csv.encode("utf-8"))
+        self.assertEqual(self.st.export_reserved, 1)
+        self.assertFalse(self.st.import_reserved)
+
+    def test_sample_not_unique_stops(self):
+        self.st.hits = 3
+        res = self.run_sample()
+        s = self.step(res, "06_取り出し予約")
+        self.assertFalse(s["ok"])
+        self.assertIn("3件", s["note"])
+        self.assertEqual(self.st.export_reserved, 0)
+        self.assertNotIn("07_取り出しファイル", [x["name"] for x in res["steps"]])
+
+    def test_sample_export_timeout(self):
+        self.st.export_ready_after = -1
+        res = self.run_sample(export_poll_times=2)
+        s = self.step(res, "07_取り出しファイル")
+        self.assertFalse(s["ok"])
+        self.assertIn("完了しませんでした", s["note"])
+        self.assertFalse((self.out / "取り出し見本.csv").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

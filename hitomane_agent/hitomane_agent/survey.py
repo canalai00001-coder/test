@@ -7,6 +7,7 @@
 sample（募集番号）を渡したときだけ、その1件を「ファイル取出予約」して、予約一覧から CSV の見本をダウンロードする。
 """
 import os
+import re
 import time
 from pathlib import Path
 from urllib.parse import urljoin
@@ -166,7 +167,70 @@ class Survey:
             self.record(name, False, page, f"エラー: {e}")
 
     def step_sample(self, page: Page, sample: str) -> None:
-        """Task 4 で作る。"""
+        """募集管理で sample（募集番号）を検索し、1件だけのときに「ファイル取出予約」して、予約一覧から CSV を落とす。"""
+        name = "06_取り出し予約"
+        try:
+            box = page.locator("input[type=text]")
+            if not box.count():
+                self.save(name, page)
+                self.record(name, False, page, "フリーワードの入力欄が見つかりませんでした")
+                return
+            box.first.fill(sample)
+            search = page.get_by_role("button", name="検索", exact=True)
+            if not search.count():
+                search = page.get_by_text("検索", exact=True)
+            search.first.click()
+            page.wait_for_load_state("networkidle")
+            m = re.search(r"全\s*([\d,]+)\s*件", page.inner_text("body"))
+            hits = int(m.group(1).replace(",", "")) if m else None
+            if hits != 1:
+                self.save(name, page)
+                self.record(name, False, page, f"「{sample}」の検索結果が {hits if hits is not None else '?'}件 のため取り出しません"
+                                               "（1件だけのときに取り出します）")
+                return
+            if not self.click_text(page, "ファイル取出予約"):
+                self.save(name, page)
+                self.record(name, False, page, "「ファイル取出予約」が見つかりませんでした")
+                return
+            page.wait_for_timeout(1000)
+            self.save(name, page)
+            self.record(name, True, page)
+        except Exception as e:
+            self.record(name, False, page, f"エラー: {e}")
+            return
+        self.step_download(page)
+
+    def step_download(self, page: Page) -> None:
+        """予約一覧のいちばん上の行が「完了」になるまで「最新を表示する」を押して待ち、取出しファイルを落とす。"""
+        name = "07_取り出しファイル"
+        started = time.time()
+        try:
+            for i in range(self.export_poll_times + 1):
+                row = page.locator("tr", has=page.locator("td")).first
+                if row.count() and "完了" in row.inner_text():
+                    link = row.locator("a", has_text=".csv")
+                    if link.count():
+                        with page.expect_download() as d:
+                            link.first.click()
+                        d.value.save_as(str(self.out / "取り出し見本.csv"))
+                        self.save(name, page)
+                        self.record(name, True, page, f"取り出し見本.csv（{d.value.suggested_filename}）")
+                        return
+                if i == self.export_poll_times:
+                    break
+                time.sleep(self.poll_interval)
+                refresh = page.get_by_text("最新を表示する")
+                if refresh.count():
+                    refresh.first.click()
+                    page.wait_for_load_state("networkidle")
+                else:
+                    page.reload()
+            self.save(name, page)
+            self.record(name, False, page, f"{(time.time() - started) / 60:.0f}分待っても完了しませんでした"
+                                           "（予約はヒトマネに残っています）")
+        except Exception as e:
+            self.save(name, page)
+            self.record(name, False, page, f"エラー: {e}")
 
 
 def run_survey(info: dict, out_dir: Path, headed: bool = False, sample: str = "", log=print, **opts) -> dict:
