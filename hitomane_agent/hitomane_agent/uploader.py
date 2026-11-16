@@ -4,9 +4,12 @@
 ファイルを選び、「既存原稿と同じ募集番号の原稿を上書きせずに取り込む」は外したまま「ファイル取込予約」→
 取込ファイル一覧で、新しくできた行が終わるまで「最新を表示する」を押して待つ。
 
-成功とみなすのは、新しい行のステータスが「完了」で、ステータス・詳細にエラーらしい文言がないときだけ。
-完了・エラーの実物の表示はまだ見ていない（2026-11-16 時点）。最初の実物の取り込みで確かめて直す。
+成功とみなすのは、新しい行のステータスが「完了」で、ステータス・詳細にエラーらしい文言がなく、
+詳細の「成功: N件」が CSV の件数と同じときだけ。2026-11-16 に1件取り込んだときの実物の行は
+「2026/11/16 16:49:33 | 2026/11/16 16:51:31 | 募集管理（新） | ….csv | 完了 | 成功: 1件 （8秒） | 2026/11/19」
+（待っているあいだは「待機中 | 実行までしばらくお待ち下さい」）。エラーのときの表示はまだ見ていない。
 """
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +17,15 @@ from pathlib import Path
 from playwright.sync_api import Page, sync_playwright
 
 from . import site
+
+
+def _rows(path: Path) -> int | None:
+    """CSV の原稿の数（見出しを除く）。読めなければ None（そのときは件数を照らし合わせない）。"""
+    from .csv_export import read_csv
+    try:
+        return len(read_csv(path.read_bytes(), path.stem).rows)
+    except Exception:
+        return None
 
 
 @dataclass
@@ -106,12 +118,12 @@ class HitomaneUploader:
                 page.wait_for_load_state("networkidle")
             finally:
                 page.remove_listener("dialog", answer)
+            # 予約するとダイアログが閉じて募集管理が読み込み直される（iframe はもうないので、中身は読まない）
             self._shot(page, f"{label}_取込予約")
-            (self.out / f"{label}_取込予約.txt").write_text(
-                "確認ダイアログ: " + " / ".join(messages) + "\n\n" + frame.locator("body").inner_text(), encoding="utf-8")
+            (self.out / f"{label}_取込予約.txt").write_text("確認ダイアログ: " + " / ".join(messages), encoding="utf-8")
         except Exception as e:
             return UploadResult(path.name, False, f"取込予約の操作中にエラー: {e}", "", self._shot(page, f"{label}_取込予約_エラー"))
-        return self._wait(page, path, before)
+        return self._wait(page, path, before, _rows(path))
 
     def _dialog(self, page: Page):
         """取込ダイアログの中身（iframe）。"""
@@ -125,7 +137,7 @@ class HitomaneUploader:
             page.wait_for_timeout(300)
         raise RuntimeError("取込ダイアログが開きませんでした")
 
-    def _wait(self, page: Page, path: Path, before: str) -> UploadResult:
+    def _wait(self, page: Page, path: Path, before: str, rows: int | None) -> UploadResult:
         label = path.stem
         started = time.time()
         page.goto(site.url(self.info, "csv_import_queues"))
@@ -141,10 +153,17 @@ class HitomaneUploader:
                 if not any(w in status for w in site.PENDING):
                     shot = self._shot(page, f"{label}_取込結果")
                     (self.out / f"{label}_取込結果.txt").write_text(text, encoding="utf-8")
-                    if "完了" in status and not site.ERROR_WORDS.search(status + " " + detail):
-                        return UploadResult(path.name, True, f"取り込みが終わりました（{status}）", text, shot)
-                    return UploadResult(path.name, False, f"取り込みが「{status}」で終わりました。詳細を確かめてください",
-                                        text, shot)
+                    if "完了" not in status or site.ERROR_WORDS.search(status + " " + detail):
+                        return UploadResult(path.name, False, f"取り込みが「{status}」で終わりました。詳細を確かめてください",
+                                            text, shot)
+                    # 実物の完了の詳細は「成功: 1件 （8秒）」（2026-11-16）。成功の件数が CSV の件数と合うときだけ成功
+                    m = re.search(r"成功\s*[:：]\s*([\d,]+)\s*件", detail)
+                    done = int(m.group(1).replace(",", "")) if m else None
+                    if rows is not None and done != rows:
+                        return UploadResult(path.name, False, f"CSV は {rows}件ですが、成功は "
+                                            f"{'?' if done is None else done}件でした。取込ファイル一覧の詳細を確かめてください",
+                                            text, shot)
+                    return UploadResult(path.name, True, f"取り込みが終わりました（{status}・{detail}）", text, shot)
             if i == self.poll_times:
                 break
             if i % 6 == 5:

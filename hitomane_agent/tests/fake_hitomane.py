@@ -6,6 +6,8 @@ a.btn_search_btn02）、検索欄の見出しにも「検索」の文字があ�
 取込ダイアログは iframe（select_new_format）で、#file_csv・#duplicate_check_term・a.btn_operation_btn02（queue_import()）。
 取込ファイル一覧の結果の出方（完了・エラーの文言）は実物ではまだ見ていないので、ここでは State で変えられるようにしている。
 """
+import csv
+import io
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -32,7 +34,8 @@ class State:
         self.import_ready_after = 1  # 取込ファイル一覧で「最新を表示する」を何回押したら終わるか（-1 なら終わらない）
         self.import_refreshes = 0
         self.import_status = "完了"
-        self.import_detail = "全1件中 1件の取込が完了しました"
+        # 終わった行の詳細。None なら実物（2026-11-16 に1件取り込んだとき）と同じ「成功: N件 （8秒）」（N は CSV の行数）
+        self.import_detail = None
         self.csv = "﻿募集番号,ステータス,開始日,終了日\r\nCB93208,掲載,2026/08/17,2027/08/17\r\n"
 
 
@@ -134,9 +137,13 @@ def make_handler(st: State):
                 rows = ""
                 for n, imp in reversed(list(enumerate(st.imports, start=1))):
                     last = n == len(st.imports)
-                    status = st.import_status if (done or not last) else "待機中"
-                    detail = st.import_detail if (done or not last) else ""
-                    rows += (f"<tr class=record><td>2026/11/16 10:00:{n:02d}</td><td></td><td>募集管理（新）</td>"
+                    finished = done or not last
+                    status = st.import_status if finished else "待機中"
+                    lines = len(list(csv.reader(io.StringIO(imp["file"].decode("cp932"), newline="")))) - 1
+                    detail = ((st.import_detail if st.import_detail is not None else f"成功: {lines}件 （8秒）")
+                              if finished else "実行までしばらくお待ち下さい")
+                    rows += (f"<tr class=record><td>2026/11/16 10:00:{n:02d}</td>"
+                             f"<td>{'2026/11/16 10:05:00' if finished else '-'}</td><td>募集管理（新）</td>"
                              f"<td>upload_{n}.csv</td><td class=status-column>{status}</td><td>{detail}</td><td>2026/11/19</td></tr>")
                 empty = ("<tbody class=messages><tr><td colspan=7><p class=empty-message"
                          f"{' style=display:none' if rows else ''}>見つかりませんでした</p></td></tr></tbody>")
@@ -190,7 +197,8 @@ def make_handler(st: State):
                 st.imports.append({"file": data, "dup": b'name="duplicate_check_term"' in raw})
                 st.import_reserved = True
                 st.import_refreshes = 0
-                return self.send(200, "ファイル取込予約を受け付けました")
+                # 実物は、予約するとダイアログが閉じて募集管理の画面が読み込み直される（iframe はなくなる）
+                return self.send(200, "ファイル取込予約を受け付けました<script>parent.location.reload();</script>")
             if u.path == "/m66w/import_reserve":
                 st.import_reserved = True
                 return self.send(200, "ok")

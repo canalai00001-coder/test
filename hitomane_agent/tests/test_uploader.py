@@ -50,8 +50,20 @@ class TestUploader(unittest.TestCase):
         self.assertIn("開始日の形式が不正です", r.row_text)
 
     def test_error_words_in_detail(self):
-        self.st.import_detail = "全2件中 1件 取込に失敗しました"
+        self.st.import_detail = "成功: 0件 エラー: 1件 （8秒）"
         self.assertFalse(self.up()[0].ok)
+
+    def test_success_count_must_match_rows(self):
+        # 実物の完了の表示は「成功: 1件 （8秒）」。成功の件数が CSV の件数より少なければ失敗とする
+        self.st.import_detail = "成功: 0件 （8秒）"
+        r = self.up()[0]
+        self.assertFalse(r.ok)
+        self.assertIn("1件", r.message)
+
+    def test_real_success_text(self):
+        r = self.up()[0]
+        self.assertTrue(r.ok, r.message)
+        self.assertIn("成功: 1件", r.row_text)
 
     def test_timeout(self):
         self.st.import_ready_after = -1
