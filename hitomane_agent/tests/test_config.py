@@ -19,7 +19,7 @@ class TestConfig(unittest.TestCase):
     def test_settings_has_required_keys(self):
         s = config.load("settings.json")
         for k in ("spreadsheet_id", "output_sheet_prefix", "service_account_file", "login_spreadsheet_id",
-                  "accounts_sheet", "login_company", "hitomane", "csv"):
+                  "accounts_sheets", "login_company", "hitomane", "csv"):
             self.assertIn(k, s)
         for k in ("base_url", "timeout_ms", "poll_interval_ms", "export_poll_times"):
             self.assertIn(k, s["hitomane"])

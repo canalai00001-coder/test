@@ -6,7 +6,8 @@
   "service_account_file": "service_account.json",
   "login_spreadsheet_id": "1nPk9AG7wePhszTO4bcN8Rs_gFNJKjlj0YAFanz9ggK4",
   "_login_spreadsheet_id_説明": "ログイン情報シートのあるスプレッドシート（Q-mate の通勤用と同じ）。",
-  "accounts_sheet": "Q-mateログイン情報",
+  "accounts_sheets": ["ヒトマネログイン情報", "Q-mateログイン情報"],
+  "_accounts_sheets_説明": "ログイン情報を探すシート（上から順に）。ヒトマネ専用のシートは会社名の列がなくてもよい。",
   "login_company": "ヒトマネ",
   "hitomane": {
     "base_url": "https://kanri.hitomgr.jp/m66w/",

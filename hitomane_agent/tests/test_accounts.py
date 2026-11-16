@@ -29,7 +29,7 @@ class TestLoginInfo(unittest.TestCase):
                         [{"type": "user"}])
         self.assertEqual(accounts.login_info(SETTINGS, book),
                          {"login_id": "Minami", "password": "pw", "url": "https://kanri.hitomgr.jp/m66w/"})
-        self.assertEqual(book.opened, ["Q-mateログイン情報"])
+        self.assertEqual(book.opened, ["ヒトマネログイン情報"])
 
     def test_url_column_is_used_when_filled(self):
         book = FakeBook([["ヒトマネ", "Minami", "pw", "https://kanri.hitomgr.jp/other/", ""]])
@@ -47,6 +47,40 @@ class TestLoginInfo(unittest.TestCase):
     def test_blank_password(self):
         with self.assertRaisesRegex(RuntimeError, "パスワードが空欄"):
             accounts.login_info(SETTINGS, FakeBook([["ヒトマネ", "Minami", "", "", ""]]))
+
+
+
+class MultiBook:
+    """シートが複数ある本（無いシートは gspread と同じく WorksheetNotFound）。"""
+    def __init__(self, sheets, perms=()):
+        self.sheets, self.perms = sheets, list(perms)
+
+    def worksheet(self, name):
+        import gspread
+        if name not in self.sheets:
+            raise gspread.WorksheetNotFound(name)
+        return types.SimpleNamespace(get_all_values=lambda: self.sheets[name])
+
+    def list_permissions(self):
+        return self.perms
+
+
+class TestHitomaneSheet(unittest.TestCase):
+    def test_own_sheet_without_company_column(self):
+        book = MultiBook({"ヒトマネログイン情報": [["ログインID", "パスワード", "URL"], ["Minami", "pw", ""]]})
+        self.assertEqual(accounts.login_info(SETTINGS, book)["login_id"], "Minami")
+
+    def test_own_sheet_with_company_column(self):
+        book = MultiBook({"ヒトマネログイン情報": [HEAD, ["ヒトマネ", "Minami", "pw", "", ""]]})
+        self.assertEqual(accounts.login_info(SETTINGS, book)["password"], "pw")
+
+    def test_falls_back_to_qmate_sheet(self):
+        book = MultiBook({"Q-mateログイン情報": [HEAD, ["ヒトマネ", "Minami", "pw", "", ""]]})
+        self.assertEqual(accounts.login_info(SETTINGS, book)["login_id"], "Minami")
+
+    def test_neither_sheet(self):
+        with self.assertRaisesRegex(RuntimeError, "ヒトマネログイン情報"):
+            accounts.login_info(SETTINGS, MultiBook({}))
 
 
 if __name__ == "__main__":
