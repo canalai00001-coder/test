@@ -113,6 +113,52 @@ class TestApp(unittest.TestCase):
         self.assertEqual(code, 200)
         run.assert_called_once_with("入稿：ヒトマネ出力_A", ["upload", "--sheet", "ヒトマネ出力_A", "--yes"])
 
+    def test_overview_shows_last_total(self):
+        from hitomane_agent import workflow
+        r = self.call("/api/overview")[1]
+        self.assertIsNone(r["total"])
+        workflow.save_total("Minami", 49990)
+        r = self.call("/api/overview")[1]
+        self.assertEqual((r["total"], r["limit"], r["left"]), (49990, 50000, 10))
+        workflow.save_total("Minami", None)  # 読めなかったときは前の件数のまま
+        self.assertEqual(self.call("/api/overview")[1]["total"], 49990)
+
+    def test_checks_do_not_return_password(self):
+        info = {"login_id": "Minami", "password": "secret-pw", "url": "u"}
+        with mock.patch.object(app_mod.App, "_login_info", return_value=info):
+            code, items = self.call("/api/checks")
+        self.assertEqual(code, 200)
+        self.assertNotIn("secret-pw", json.dumps(items, ensure_ascii=False))
+        names = {i["name"]: i["ok"] for i in items}
+        self.assertTrue(names["【AI用】スプレッドシートを読める（出力シート 2枚）"])
+        self.assertTrue(names["ヒトマネのログイン情報（Minami）"])
+
+    def test_checks_show_login_error(self):
+        with mock.patch.object(app_mod.App, "_login_info", side_effect=RuntimeError("パスワードが空欄です")):
+            items = self.call("/api/checks")[1]
+        self.assertIn({"name": "ヒトマネのログイン情報", "ok": False, "hint": "パスワードが空欄です"}, items)
+
+    def test_login_starts_command(self):
+        with mock.patch.object(app_mod.App, "run", return_value={"ok": True}) as run:
+            self.assertEqual(self.call("/api/login", {})[0], 200)
+        run.assert_called_once_with("ログインの確認と全件数", ["login"])
+
+    def test_takedown_history_newest_first(self):
+        from hitomane_agent import takedown
+        takedown.record({"login_id": "Minami", "conditions": "A", "rows": 1, "ok": True, "results": []})
+        takedown.record({"login_id": "Minami", "conditions": "B", "rows": 2, "ok": False, "results": []})
+        h = self.call("/api/takedown/history")[1]
+        self.assertEqual([(x["conditions"], x["ok"]) for x in h], [("B", False), ("A", True)])
+        self.assertNotIn("results", h[0])
+
+    def test_update_from_zip(self):
+        with mock.patch.object(app_mod, "apply_zip", return_value=3) as ap:
+            req = urllib.request.Request(f"{self.base}/api/update/zip?t={self.app.token}", data=b"PK..", method="POST")
+            with urllib.request.urlopen(req) as r:
+                self.assertEqual(json.loads(r.read())["changed"], 3)
+        ap.assert_called_once_with(b"PK..", "hitomane_agent")
+        self.assertEqual(self.call("/api/version")[1]["message"], "ダウンロードした ZIP から更新")
+
 
 class TestTakedownGate(TestApp):
     def setUp(self):
@@ -140,6 +186,12 @@ class TestTakedownGate(TestApp):
         self.assertEqual(args[-1], "--yes")
         self.assertIn("2件", title)
         self.assertEqual(len(self.app.prepared()), 1)
+        self.assertEqual((self.app.prepared()[0]["from"], self.app.prepared()[0]["to"]), ("2026/10/01", "2026/10/31"))
+        with mock.patch.object(app_mod.App, "run") as run:  # 確認の文のための問い合わせでは実行しない
+            code, r = self.call("/api/takedown", {"from": "2026/10/1", "to": "2026/10/31", "preview": True})
+        self.assertEqual(code, 200)
+        self.assertIn("2件", r["title"])
+        run.assert_not_called()
 
     def test_bad_range(self):
         with self.assertRaises(ValueError):

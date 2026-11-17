@@ -1,6 +1,7 @@
 """ヒトマネ入稿ツールのコマンド。
 
   python -m hitomane_agent survey [--headed] [--sample [募集番号]]       管理画面の画面調査
+  python -m hitomane_agent login                                        ログインの確認と募集管理の全件数
   python -m hitomane_agent list                                         出力シートの一覧とチェックの状態
   python -m hitomane_agent check (--sheet 名前 | --csv パス)            入稿前のチェック
   python -m hitomane_agent upload (--sheet 名前 | --csv パス) [--yes] [--dry-run]   ヒトマネに取り込む
@@ -96,7 +97,9 @@ def cmd_upload(args) -> int:
         return 0
     info = accounts.login_info(settings)
     up = HitomaneUploader(info, settings["hitomane"], config.OUTPUT_DIR / ms.name, headed=args.headed)
-    print(workflow.total_note(up.total(), len(ms.rows), rules))
+    total = up.total()
+    workflow.save_total(info["login_id"], total)
+    print(workflow.total_note(total, len(ms.rows), rules))
     if not args.yes and input(f"ヒトマネ（{info['login_id']}）に取り込みますか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
@@ -108,6 +111,32 @@ def cmd_upload(args) -> int:
     if len(results) < len(paths):
         print(f"失敗したため、残りの {len(paths) - len(results)} ファイルは取り込んでいません")
     return 0 if ok else 2
+
+
+def cmd_login(args) -> int:
+    """ログインできるかを確かめ、募集管理の全件数を読んで覚える（ヒトマネは変えない）。"""
+    from .uploader import HitomaneUploader
+
+    settings, rules = _settings(args), config.load("rules.json")
+    try:
+        info = accounts.login_info(settings)
+    except Exception as e:
+        print(f"ログイン情報を読めませんでした: {e}")
+        return 1
+    print(f"ヒトマネに {info['login_id']} でログインします（{info['url']}）")
+    try:
+        total = HitomaneUploader(info, settings["hitomane"], config.OUTPUT_DIR / "ログイン確認",
+                                 headed=args.headed).total()
+    except Exception as e:
+        print(f"ログインできませんでした: {e}")
+        return 2
+    workflow.save_total(info["login_id"], total)
+    print("ログインできました")
+    if total is None:
+        print("募集管理の全件数は読めませんでした")
+    else:
+        print(f"募集管理の全件数: {total:,}件（上限 {rules['total_limit']:,}件、あと {rules['total_limit'] - total:,}件）")
+    return 0
 
 
 def cmd_takedown(args) -> int:
@@ -191,6 +220,11 @@ def main(argv=None) -> int:
 
     s = sub.add_parser("list", help="出力シートの一覧とチェック・入稿の状態")
     s.set_defaults(func=cmd_list)
+
+    s = sub.add_parser("login", help="ログインできるかを確かめ、募集管理の全件数を読む（ヒトマネは変えない）")
+    s.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
+    s.add_argument("--user", help="使うログインID（省略時は settings の login_user）")
+    s.set_defaults(func=cmd_login)
 
     for name, func, text in (("check", cmd_check, "入稿前のチェック"), ("upload", cmd_upload, "ヒトマネに取り込む")):
         s = sub.add_parser(name, help=text)

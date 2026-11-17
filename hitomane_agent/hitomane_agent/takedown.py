@@ -109,7 +109,13 @@ def prepared_list(today: date) -> list[dict]:
     path = config.STATE_DIR / "takedown_prepared.json"
     if not path.exists():
         return []
-    return [v for k, v in json.loads(path.read_text(encoding="utf-8")).items() if k.startswith(f"{today:%Y-%m-%d}|")]
+    out = []
+    for k, v in json.loads(path.read_text(encoding="utf-8")).items():
+        if not k.startswith(f"{today:%Y-%m-%d}|"):
+            continue
+        a, b = k.split("|")[2].split("-")  # 操作画面の「この期間を入れる」用
+        out.append({**v, "from": f"{a[:4]}/{a[4:6]}/{a[6:]}", "to": f"{b[:4]}/{b[4:6]}/{b[6:]}"})
+    return out
 
 
 def record(entry: dict) -> None:

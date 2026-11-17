@@ -94,5 +94,19 @@ class TestTakedownCli(unittest.TestCase):
         self.assertEqual(self.st.export_reserved, 0)
 
 
+    def test_login_reads_and_saves_total(self):
+        from hitomane_agent import workflow
+        self.st.total = 49990
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = cli.main(["login"])
+        self.assertEqual(code, 0, buf.getvalue())
+        self.assertIn("ログインできました", buf.getvalue())
+        self.assertIn("49,990件", buf.getvalue())
+        self.assertIn("あと 10件", buf.getvalue())
+        self.assertEqual(workflow.last_total()["total"], 49990)
+        self.assertEqual((self.st.export_reserved, self.st.imports), (0, []))
+
+
 if __name__ == "__main__":
     unittest.main()

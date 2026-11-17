@@ -95,3 +95,15 @@ def record_upload(ms: Manuscript, results: list) -> None:
                              "uploaded_at": datetime.now().isoformat(timespec="seconds"),
                              "files": [r.file for r in results]}
         save_state("uploaded.json", uploaded)
+
+
+def save_total(login_id: str, total: int | None) -> None:
+    """最後に読んだ募集管理の全件数を覚えておく（操作画面の入稿タブに出す）。読めなかったときは書かない。"""
+    if total is None:
+        return
+    save_state("total.json", {"login_id": login_id, "total": total,
+                              "at": datetime.now().isoformat(timespec="seconds")})
+
+
+def last_total() -> dict:
+    return load_state("total.json")

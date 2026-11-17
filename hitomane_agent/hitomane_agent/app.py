@@ -1,11 +1,14 @@
 """操作画面。app.bat から起動すると、パソコンの中だけで動く画面がブラウザで開く。
 
 画面からできること
-  - 出力シート（ヒトマネ出力_…）の一覧と、チェック・入稿の状態を見る
+  - 入稿：募集管理の全件数（上限まであと何件か）と、出力シート（ヒトマネ出力_…）の一覧と、チェック・入稿の状態を見る
   - チェック：シートを読んでチェックし、結果（report.html）を開く
-  - 入稿：止める条件と、募集管理の全件数を確かめてから、ヒトマネに取り込む（裏で upload コマンドを動かし、出力を画面に出す）
+  - 入稿ボタン：止める条件と、募集管理の全件数を確かめてから、ヒトマネに取り込む（裏で upload コマンドを動かし、出力を画面に出す）
   - 取り下げ：掲載開始日の期間を入れて「確認だけ」で件数を見てから、「取り下げる」（今日・同じ条件の確認のファイルを使う）
-  - 更新：GitHub に新しい版があるかを確かめ、ボタン1つで最新にする
+  - 更新：GitHub に新しい版があるかを確かめ、ボタン1つで最新にする（ダウンロードした ZIP からも）
+  - 設定の確認：鍵・ログインID・スプレッドシート・ログイン情報がそろっているか、ヒトマネにログインできるか
+
+見た目とタブの分け方は Q-mate 版（qmate_agent/qmate_agent/app.py）に合わせている。
 """
 import html
 import io
@@ -135,6 +138,51 @@ class App:
         from . import takedown
         return takedown.prepared_list(date.today())
 
+    def history(self) -> list[dict]:
+        """これまでの取り下げ（新しい順）。"""
+        p = config.STATE_DIR / "takedown.json"
+        rows = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+        return [{k: r.get(k) for k in ("at", "login_id", "conditions", "rows", "ok")} for r in reversed(rows)]
+
+    # ---- 上の帯・入稿タブ ----
+    def overview(self) -> dict:
+        from datetime import date
+
+        settings, rules = self._settings(), config.load("rules.json")
+        t = workflow.last_total()
+        limit = rules["total_limit"]
+        return {"today": f"{date.today():%Y/%m/%d}", "login_user": settings.get("login_user") or "",
+                "limit": limit, "total": t.get("total"), "total_at": t.get("at", ""),
+                "left": (limit - t["total"]) if t.get("total") is not None else None}
+
+    # ---- 設定の確認 ----
+    def checks(self) -> list[dict]:
+        """ログインまでに要るものがそろっているか。パスワードの中身は返さない。"""
+        settings = self._settings()
+        items = [{"name": "サービスアカウントの鍵（service_account.json）",
+                  "ok": (config.ROOT / settings["service_account_file"]).exists(),
+                  "hint": "qmate_agent の service_account.json を hitomane_agent フォルダにも置いてください"},
+                 {"name": "このパソコンで使うログインID（login_user）",
+                  "ok": bool((settings.get("login_user") or "").strip()),
+                  "hint": "config\\settings.local.json に \"login_user\" を書いてください（空欄なら担当者の行の最初の行を使います）"}]
+        try:
+            from .sheet import Spreadsheet
+            n = len(Spreadsheet(settings, self.book).output_sheet_names())
+            items.append({"name": f"【AI用】スプレッドシートを読める（出力シート {n}枚）", "ok": True, "hint": ""})
+        except Exception as e:
+            items.append({"name": "【AI用】スプレッドシートを読める", "ok": False,
+                          "hint": f"読めませんでした：{e}（サービスアカウントに共有されているか確かめてください）"})
+        try:
+            info = self._login_info()
+            items.append({"name": f"ヒトマネのログイン情報（{info['login_id']}）", "ok": True, "hint": ""})
+        except Exception as e:
+            items.append({"name": "ヒトマネのログイン情報", "ok": False, "hint": str(e)})
+        return items
+
+    def _login_info(self) -> dict:
+        from . import accounts
+        return accounts.login_info(self._settings())
+
     def report(self, name: str) -> bytes:
         path = (config.OUTPUT_DIR / name / "report.html").resolve()
         if config.OUTPUT_DIR.resolve() not in path.parents or not path.exists():
@@ -158,6 +206,13 @@ class App:
                                     timeout=120) as r:
             changed = apply_zip(r.read(), u["subdir"])
         _save_version({**info["latest"], "updated_at": datetime.now().isoformat(timespec="seconds")})
+        return {"changed": changed}
+
+    def update_from_zip(self, data: bytes) -> dict:
+        """ダウンロードしておいた GitHub の ZIP から更新する（GitHub に繋がらないとき用）。"""
+        changed = apply_zip(data, self._settings()["update"]["subdir"])
+        _save_version({"sha": "", "date": "", "message": "ダウンロードした ZIP から更新",
+                       "updated_at": datetime.now().isoformat(timespec="seconds")})
         return {"changed": changed}
 
 
@@ -199,104 +254,126 @@ def _save_version(v: dict) -> None:
     (config.STATE_DIR / "version.json").write_text(json.dumps(v, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-PAGE = """<!doctype html><html lang=ja><head><meta charset=utf-8><title>ヒトマネ入稿ツール</title>
+PAGE = r"""<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ヒトマネ入稿ツール</title>
 <style>
-body{font-family:sans-serif;margin:24px;color:#1f2328;max-width:1100px}
-table{border-collapse:collapse;width:100%;margin:8px 0 16px}td,th{border:1px solid #d0d7de;padding:6px 8px;font-size:14px;text-align:left}
-th{background:#f6f8fa}button{padding:4px 12px;margin-right:4px;cursor:pointer}
-.OK{color:#1a7f37;font-weight:bold}.要確認{color:#9a6700;font-weight:bold}.NG{color:#cf222e;font-weight:bold}
-#log{background:#0d1117;color:#e6edf3;padding:12px;white-space:pre-wrap;min-height:120px;max-height:420px;overflow:auto;font-size:13px}
-#msg{margin:8px 0;padding:8px;background:#fff8c5;display:none}
+:root{--bg:#f5f6f8;--card:#fff;--ink:#1f2328;--sub:#59636e;--line:#d8dde3;--accent:#1f6feb;--danger:#cf222e;--ok:#1a7f37;--warn:#9a6700}
+*{box-sizing:border-box}body{margin:0;font-family:"Yu Gothic UI","Meiryo",sans-serif;background:var(--bg);color:var(--ink);font-size:14px}
+header{background:#24292f;color:#fff;padding:12px 20px;display:flex;align-items:center;gap:16px}
+header h1{font-size:16px;margin:0;font-weight:600}header span{color:#aab3bd;font-size:12px}
+nav{display:flex;gap:4px;padding:0 20px;background:#fff;border-bottom:1px solid var(--line);overflow-x:auto}
+nav button{border:0;background:none;padding:12px 16px;font-size:14px;cursor:pointer;color:var(--sub);border-bottom:2px solid transparent;white-space:nowrap}
+nav button.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+main{padding:20px;max-width:1200px;margin:0 auto}section{display:none}section.on{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 12px}table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}th{color:var(--sub);font-weight:600;background:#fafbfc}
+.btn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px;white-space:nowrap}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn.danger{background:var(--danger);border-color:var(--danger);color:#fff}
+.btn:disabled{opacity:.5;cursor:not-allowed}.row{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-bottom:12px}
+label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--sub)}input{padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:13px}
+pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px;overflow:auto;font-size:12px;white-space:pre-wrap;margin:0}
+.note{color:var(--sub);font-size:12px;margin:4px 0 0}.card>p.note{margin-bottom:12px}.ok,.OK{color:var(--ok)}.ng,.NG{color:var(--danger)}.warn,.要確認{color:var(--warn)}
+.OK,.NG,.要確認{font-weight:600}.status{font-size:13px;margin-bottom:8px}.empty{color:var(--sub);padding:12px 0}.big{font-size:20px;font-weight:600}
 </style></head><body>
-<h1>ヒトマネ入稿ツール</h1>
-<p>【AI用】ヒトマネ 求人原稿自動生成 の「ヒトマネ出力_…」シートをチェックして、ヒトマネに取り込みます。
-チェックのあとにシートを直したときは、もう一度チェックしてください。</p>
-<div id=msg></div>
-<h2>出力シート <button onclick="loadSheets()">一覧を読み直す</button></h2>
-<table><thead><tr><th>シート</th><th>原稿</th><th>チェック</th><th>入稿</th><th></th></tr></thead><tbody id=sheets>
-<tr><td colspan=5>読み込み中…</td></tr></tbody></table>
-<h2>取り下げ</h2>
-<p>掲載開始日がこの期間の、掲載中の原稿を取り下げます（開始日・終了日を2年前、ステータスを非掲載にして取り込み直します）。
-先に「確認だけ」で件数を見てから、「取り下げる」を押してください。</p>
-<p>掲載開始日 <input id=tdFrom placeholder="2026/10/01" size=12> 〜 <input id=tdTo placeholder="2026/10/31" size=12>
-<button onclick="takedown(true)">確認だけ</button> <button onclick="takedown(false)">取り下げる</button></p>
-<table><thead><tr><th>今日の確認</th><th>検索の件数</th><th>取り下げる原稿</th><th>除いた原稿</th><th>確認した時刻</th></tr></thead>
-<tbody id=prepared></tbody></table>
-<h2>実行の記録</h2><div id=log></div>
-<h2>更新</h2><p><button onclick="checkUpdate()">新しい版を確かめる</button> <span id=upd></span></p>
+<header><h1>ヒトマネ入稿ツール</h1><span id="today"></span><span id="who"></span></header>
+<nav><button data-tab="post" class="on">入稿</button><button data-tab="takedown">取り下げ</button><button data-tab="update">更新</button><button data-tab="check">設定の確認</button></nav>
+<main>
+<section id="post" class="on">
+  <div class="card"><h2>募集管理の全件数</h2>
+    <div id="total" class="status">読み込んでいます…</div>
+    <div class="row"><button class="btn" onclick="start('/api/login',{})">ログインして全件数を確かめる</button></div>
+    <p class="note">ヒトマネに入れられるのは全部で 50,000件までです。入稿の前にも、そのときの全件数を読んで確かめます。</p></div>
+  <div class="card"><h2>出力シート</h2>
+    <p class="note">【AI用】ヒトマネ 求人原稿自動生成 の「ヒトマネ出力_…」シートです。チェックしてから入稿してください。チェックのあとにシートを直したときは、もう一度チェックしてください。</p>
+    <div id="sheets">読み込んでいます…</div>
+    <div class="row" style="margin-top:12px"><button class="btn" onclick="loadSheets()">一覧を読み直す</button></div></div>
+</section>
+<section id="takedown">
+  <div class="card"><h2>原稿の取り下げ</h2>
+    <p class="note">掲載開始日がこの期間の、掲載中の原稿を取り下げます（開始日・終了日を2年前、ステータスを非掲載にして取り込み直します）。<br>
+    先に「確認だけ」で件数を見てから、「取り下げる」を押してください。「取り下げる」は、今日・同じ期間の「確認だけ」のファイルを使います。</p>
+    <div class="row"><label>掲載開始日（から）<input id="t_from" placeholder="2026/10/01" size="12"></label>
+      <label>掲載開始日（まで）<input id="t_to" placeholder="2026/10/31" size="12"></label></div>
+    <div class="row"><button class="btn" id="t_dry">確認だけ（ヒトマネは変えない）</button><button class="btn danger" id="t_run">取り下げる</button></div></div>
+  <div class="card"><h2>今日の確認</h2><div id="prepared">読み込んでいます…</div></div>
+  <div class="card"><h2>取り下げの記録</h2><div id="t_history">読み込んでいます…</div></div>
+</section>
+<section id="update">
+  <div class="card"><h2>ツールの更新</h2><div id="ver" class="status">確認しています…</div>
+    <div class="row"><button class="btn primary" id="u_github">GitHub から最新にする</button><button class="btn" onclick="checkUpdate()">新しい版があるか確認</button></div>
+    <p class="note">ダウンロード済みの ZIP から更新する：<input type="file" id="u_zip" accept=".zip"> <button class="btn" id="u_zip_btn">この ZIP で更新</button></p>
+    <p class="note">settings.local.json・service_account.json・.venv・実行記録（state）・出力（output）は上書きしません。更新が終わったら、黒い画面と操作画面を閉じて app.bat を開き直してください。</p>
+    <div id="u_result" class="status"></div></div>
+</section>
+<section id="check">
+  <div class="card"><h2>設定の確認</h2><div id="checks"></div>
+    <div class="row" style="margin-top:12px"><button class="btn" onclick="loadChecks()">確認し直す</button><button class="btn primary" onclick="start('/api/login',{})">ヒトマネにログインできるか確かめる</button></div>
+    <p class="note">ログインの確認は、ブラウザを裏で開いてログインし、募集管理の全件数を読むだけです。ヒトマネの原稿は変えません。</p></div>
+</section>
+<div class="card"><h2 id="job_title">実行の記録</h2><div id="job_state" class="status"></div><pre id="log"></pre></div>
+</main>
 <script>
-const T = "__TOKEN__";
-const api = (p, body) => fetch(p + (p.includes("?") ? "&" : "?") + "t=" + T, body === undefined ? {} :
-  {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})
-  .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j.error || r.status); return j; });
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-const say = t => { const m = document.getElementById("msg"); m.textContent = t; m.style.display = t ? "block" : "none"; };
-function loadSheets() {
-  api("/api/sheets").then(list => {
-    document.getElementById("sheets").innerHTML = list.length ? list.map(s => `<tr>
-      <td>${esc(s.name)}</td><td>${s.rows ?? ""}</td>
-      <td><span class="${esc(s.status)}">${esc(s.status || "未実施")}</span> ${esc(s.checked_at)}
-        ${s.status ? `<a href="/report?name=${encodeURIComponent(s.name)}&t=${T}" target=_blank>結果を見る</a>` : ""}</td>
-      <td>${s.uploaded_same ? "入稿済み " : ""}${esc(s.uploaded_at)}</td>
-      <td><button onclick='check(${JSON.stringify(s.name)})'>チェック</button>
-          <button onclick='upload(${JSON.stringify(s.name)})' ${s.status && s.status !== "NG" && !s.uploaded_same ? "" : "disabled"}>入稿</button></td>
-    </tr>`).join("") : "<tr><td colspan=5>出力シートがありません。GAS の③で原稿を作ってください</td></tr>";
-  }).catch(e => say("一覧を読めませんでした: " + e.message));
-}
-function check(name) {
-  say(name + " をチェックしています…");
-  api("/api/check", {name}).then(r => { say(`${name}：原稿 ${r.rows}件、判定 ${r.status}`); loadSheets(); })
-    .catch(e => say("チェックできませんでした: " + e.message));
-}
-function upload(name) {
-  say(name + "：入稿の前の確認をしています（ヒトマネにログインして全件数を読みます）…");
-  api("/api/prepare", {name}).then(r => {
-    if (!r.ok) { say("入稿しません: " + r.problem); return; }
-    say("");
-    const text = `${name} をヒトマネに取り込みます。\\n\\n原稿 ${r.rows}件（チェック ${r.status}）\\n${r.note}` +
-      (r.status === "要確認" ? "\\n\\n注意の指摘があります。チェック結果を確かめましたか？" : "") + "\\n\\n取り込みますか？";
-    if (!confirm(text)) return;
-    api("/api/upload", {name}).then(() => follow(0)).catch(e => say(e.message));
-  }).catch(e => say("確認できませんでした: " + e.message));
-}
-function follow(since) {
-  api("/api/job?since=" + since).then(j => {
-    const log = document.getElementById("log");
-    if (since === 0) log.textContent = "■ " + j.title + "\\n";
-    log.textContent += j.lines.map(l => l + "\\n").join(""); log.scrollTop = log.scrollHeight;
-    if (j.running) setTimeout(() => follow(j.next), 1500);
-    else { log.textContent += j.code === 0 ? "\\n終わりました\\n" : "\\n止まりました（上の記録を見てください）\\n"; loadSheets(); loadPrepared(); }
-  });
-}
-function loadPrepared() {
-  api("/api/takedown/prepared").then(list => {
-    document.getElementById("prepared").innerHTML = list.length ? list.map(p => `<tr><td>${esc(p.conditions)}</td>
-      <td>${p.searched}件</td><td>${p.rows}件</td>
-      <td>${esc(Object.entries(p.skipped || {}).map(([k, v]) => k + " " + v + "件").join("、"))}</td>
-      <td>${esc(p.prepared_at)}</td></tr>`).join("") : "<tr><td colspan=5>まだありません</td></tr>";
-  });
-}
-function takedown(prepareOnly) {
-  const from = document.getElementById("tdFrom").value.trim(), to = document.getElementById("tdTo").value.trim();
-  if (!from || !to) { say("掲載開始日の期間を入れてください"); return; }
-  if (!prepareOnly && !confirm(`掲載開始日 ${from}〜${to} の掲載中の原稿を取り下げます。\\n\\n` +
-      "「今日の確認」の件数を確かめましたか？取り下げますか？")) return;
-  say("");
-  api("/api/takedown", {from, to, prepare_only: prepareOnly}).then(() => follow(0)).catch(e => say(e.message));
-}
-function checkUpdate() {
-  const u = document.getElementById("upd"); u.textContent = "確かめています…";
-  api("/api/update").then(r => {
-    if (!r.new) { u.textContent = "最新です（" + r.latest.message + "）"; return; }
-    u.innerHTML = "新しい版があります：" + esc(r.latest.message) + " <button id=go>更新する</button>";
-    document.getElementById("go").onclick = () => { u.textContent = "更新しています…";
-      api("/api/update/github", {}).then(x => u.textContent = x.changed + "ファイルを更新しました。黒い画面を閉じて app.bat を開き直してください")
-        .catch(e => u.textContent = "更新できませんでした: " + e.message); };
-  }).catch(e => u.textContent = "確かめられませんでした: " + e.message);
-}
-loadSheets();
-loadPrepared();
-</script></body></html>"""
+const T="__TOKEN__";
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const q=p=>p+(p.includes("?")?"&":"?")+"t="+T;
+async function api(p,opt){const r=await fetch(q(p),opt);const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j}
+const post=(p,b)=>api(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});
+const num=n=>n==null?"":Number(n).toLocaleString();
+const when=s=>esc(String(s||"").replace("T"," "));
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");
+  if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="takedown")loadTakedown()});
+
+async function loadOverview(){try{const d=await api("/api/overview");today.textContent="今日："+d.today;who.textContent=d.login_user?"ログインID："+d.login_user:"";
+  total.innerHTML=d.total==null?'<span class="note">まだ確かめていません。「ログインして全件数を確かめる」を押してください</span>':
+   `<span class="big">${num(d.total)}件</span>　上限 ${num(d.limit)}件・<b class="${d.left<=0?"ng":d.left<5000?"warn":"ok"}">あと ${num(d.left)}件</b><div class="note">${when(d.total_at)} に確かめた件数です</div>`}
+  catch(e){total.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+async function loadSheets(){sheets.textContent="読み込んでいます…";try{const l=await api("/api/sheets");
+  sheets.innerHTML=l.length?"<table><tr><th>シート</th><th>原稿</th><th>チェック</th><th>入稿</th><th></th></tr>"+l.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.rows==null?"":num(s.rows)+"件"}</td>
+   <td><span class="${esc(s.status)}">${esc(s.status||"未チェック")}</span> <span class="note">${when(s.checked_at)}</span>${s.status?` <a href="${q("/report?name="+encodeURIComponent(s.name))}" target="_blank">結果を見る</a>`:""}</td>
+   <td>${s.uploaded_same?'<span class="ok">入稿済み</span> ':""}<span class="note">${when(s.uploaded_at)}</span></td>
+   <td><button class="btn" data-n="${esc(s.name)}" onclick="check(this.dataset.n,this)">チェック</button> <button class="btn primary" data-n="${esc(s.name)}" onclick="upload(this.dataset.n,this)" ${s.status&&s.status!=="NG"&&!s.uploaded_same?"":"disabled"}>入稿</button></td></tr>`).join("")+"</table>"
+   :'<div class="empty">出力シートがありません。GAS の③で原稿を作ってください</div>'}catch(e){sheets.innerHTML=`<span class="ng">一覧を読めませんでした：${esc(e.message)}</span>`}}
+async function check(name,b){b.disabled=true;b.textContent="チェック中…";try{const r=await post("/api/check",{name});await loadSheets();
+  if(r.status==="NG")alert(`${name}：NG です（原稿 ${r.rows}件）。「結果を見る」で指摘を確かめてください`)}catch(e){alert("チェックできませんでした："+e.message);loadSheets()}}
+async function upload(name,b){b.disabled=true;b.textContent="確認中…";
+  try{const r=await post("/api/prepare",{name});if(!r.ok){alert("入稿しません："+r.problem);return}
+   const msg=`${name} をヒトマネに取り込みます。\n\n原稿 ${num(r.rows)}件（チェック ${r.status}）\n${r.note}`+(r.status==="要確認"?"\n\n注意の指摘があります。チェック結果を確かめましたか？":"")+"\n\n取り込みますか？";
+   await start("/api/upload",{name},msg)}catch(e){alert("確認できませんでした："+e.message)}finally{loadSheets();loadOverview()}}
+
+const tBody=()=>({from:t_from.value.trim(),to:t_to.value.trim()});
+t_dry.onclick=()=>{const b=tBody();if(!b.from||!b.to)return alert("掲載開始日の期間を入れてください");start("/api/takedown",{...b,prepare_only:true})};
+t_run.onclick=async()=>{const b=tBody();if(!b.from||!b.to)return alert("掲載開始日の期間を入れてください");
+  try{const p=await post("/api/takedown",{...b,preview:true});
+   await start("/api/takedown",b,`${p.title}\n\n開始日・終了日を2年前、ステータスを非掲載にして取り込み直します。\n「今日の確認」の件数を確かめましたか？取り下げますか？`)}catch(e){alert(e.message)}};
+function useRange(f,t){t_from.value=f;t_to.value=t;t_from.scrollIntoView({behavior:"smooth",block:"center"})}
+async function loadTakedown(){try{const l=await api("/api/takedown/prepared");
+  prepared.innerHTML=l.length?"<table><tr><th>条件</th><th>検索の件数</th><th>取り下げる原稿</th><th>除いた原稿</th><th>確認した時刻</th><th></th></tr>"+l.map(p=>`<tr><td>${esc(p.conditions)}</td><td>${num(p.searched)}件</td><td><b>${num(p.rows)}件</b></td>
+   <td>${esc(Object.entries(p.skipped||{}).map(([k,v])=>k+" "+num(v)+"件").join("、"))}</td><td>${when(p.prepared_at)}</td>
+   <td><button class="btn" data-f="${esc(p.from)}" data-t="${esc(p.to)}" onclick="useRange(this.dataset.f,this.dataset.t)">この期間を入れる</button></td></tr>`).join("")+"</table>"
+   :'<div class="empty">今日はまだ「確認だけ」をしていません</div>'}catch(e){prepared.innerHTML=`<span class="ng">${esc(e.message)}</span>`}
+  try{const h=await api("/api/takedown/history");
+  t_history.innerHTML=h.length?"<table><tr><th>実行した時刻</th><th>ログインID</th><th>条件</th><th>件数</th><th>結果</th></tr>"+h.map(r=>`<tr><td>${when(r.at)}</td><td>${esc(r.login_id)}</td><td>${esc(r.conditions)}</td><td>${num(r.rows)}件</td>
+   <td>${r.ok?'<span class="ok">取り下げました</span>':'<span class="ng">途中で止まりました</span>'}</td></tr>`).join("")+"</table>"
+   :'<div class="empty">まだ取り下げたことはありません</div>'}catch(e){t_history.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+
+async function loadChecks(){checks.textContent="確認しています…";try{const c=await api("/api/checks");checks.innerHTML="<table>"+c.map(i=>`<tr><td style="width:24px">${i.ok?'<span class="ok">✔</span>':'<span class="ng">✖</span>'}</td><td>${esc(i.name)}</td><td class="note">${i.ok?"":esc(i.hint)}</td></tr>`).join("")+"</table>"}catch(e){checks.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+async function checkUpdate(){ver.textContent="確認しています…";try{const u=await api("/api/update");const c=u.current.updated_at?`今の版：${esc(u.current.message||"")}（${when(u.current.updated_at)} に更新）`:"今の版：このツールから更新したことがないため不明";
+  ver.innerHTML=`${c}<br>最新の版：${esc(u.latest.message)}（${when(u.latest.date)}）<br>`+(u.new?'<b class="warn">新しい版があります</b>':'<span class="ok">最新です</span>')}catch(e){ver.innerHTML=`<span class="ng">確認できませんでした：${esc(e.message)}</span>`}}
+const showUpdate=r=>{u_result.innerHTML=`<span class="ok">${r.changed}ファイルを更新しました。</span>黒い画面と操作画面を閉じて、app.bat を開き直してください`};
+u_github.onclick=async()=>{if(!confirm("GitHub から最新の版を取り込みます。よろしいですか？"))return;u_result.textContent="更新しています…";try{showUpdate(await post("/api/update/github",{}))}catch(e){u_result.innerHTML=`<span class="ng">${esc(e.message)}</span>`}};
+u_zip_btn.onclick=async()=>{const f=u_zip.files[0];if(!f)return alert("ZIP ファイルを選んでください");u_result.textContent="更新しています…";try{showUpdate(await api("/api/update/zip",{method:"POST",body:await f.arrayBuffer()}))}catch(e){u_result.innerHTML=`<span class="ng">${esc(e.message)}</span>`}};
+
+let since=0,timer;
+async function start(p,b,msg){if(msg&&!confirm(msg))return;try{await post(p,b);since=0;log.textContent="";poll();document.getElementById("job_title").scrollIntoView({behavior:"smooth"})}catch(e){alert(e.message)}}
+async function poll(){clearTimeout(timer);try{const j=await api("/api/job?since="+since);if(j.title)job_title.textContent="実行の記録："+j.title;
+  if(j.lines.length){log.textContent+=j.lines.join("\n")+"\n";log.scrollTop=log.scrollHeight}since=j.next??since;
+  job_state.innerHTML=j.running?'<span class="warn">実行中…（この画面を閉じても止まりませんが、黒い画面は閉じないでください）</span>':(j.code===0?'<span class="ok">終わりました</span>':j.code==null?"":`<span class="ng">止まりました（コード ${j.code}）。記録を確認してください</span>`);
+  if(j.running)timer=setTimeout(poll,1500);else if(j.title){loadOverview();loadSheets();loadTakedown()}}catch(e){timer=setTimeout(poll,3000)}}
+loadOverview();loadSheets();loadTakedown();poll();
+</script></body></html>
+"""
 
 
 def make_handler(app: App):
@@ -335,6 +412,14 @@ def make_handler(app: App):
                     return self._send(200, app.update_info())
                 if u.path == "/api/takedown/prepared":
                     return self._send(200, app.prepared())
+                if u.path == "/api/takedown/history":
+                    return self._send(200, app.history())
+                if u.path == "/api/overview":
+                    return self._send(200, app.overview())
+                if u.path == "/api/checks":
+                    return self._send(200, app.checks())
+                if u.path == "/api/version":
+                    return self._send(200, _version())
             except Exception as e:
                 return self._send(500, {"error": html.escape(str(e))})
             self._send(404, {"error": "not found"})
@@ -344,7 +429,12 @@ def make_handler(app: App):
             if not self._authorized(parse_qs(u.query)):
                 return self._send(403, {"error": "この画面は app.bat から開いてください"})
             try:
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                data = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                if u.path == "/api/update/zip":
+                    return self._send(200, app.update_from_zip(data))
+                body = json.loads(data or b"{}")
+                if u.path == "/api/login":
+                    return self._send(200, app.run("ログインの確認と全件数", ["login"]))
                 if u.path == "/api/check":
                     return self._send(200, app.check(body["name"]))
                 if u.path == "/api/prepare":
@@ -356,7 +446,10 @@ def make_handler(app: App):
                         raise RuntimeError(problem)
                     return self._send(200, app.run(f"入稿：{name}", ["upload", "--sheet", name, "--yes"]))
                 if u.path == "/api/takedown":
-                    return self._send(200, app.run(*app.takedown_args(body)))
+                    title, args = app.takedown_args(body)
+                    if body.get("preview"):  # 「取り下げる」の確認の文に件数を出すため、実行せずに中身だけ返す
+                        return self._send(200, {"title": title})
+                    return self._send(200, app.run(title, args))
                 if u.path == "/api/update/github":
                     return self._send(200, app.update_from_github())
             except Exception as e:
