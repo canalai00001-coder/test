@@ -4,6 +4,8 @@
   python -m hitomane_agent survey --company 会社 [--headed] [--sample [募集番号]]   管理画面の画面調査
   python -m hitomane_agent login (--company 会社 | --all)               ログインの確認と募集管理の全件数・拠点
   python -m hitomane_agent list                                         出力シートの一覧とチェックの状態
+  python -m hitomane_agent plan-sheet                                   入稿予定表のシートを作る・整える
+  python -m hitomane_agent schedule [--row 5] [--dry-run] [--yes]       入稿予定表の今日の行を、作る → チェック → 入稿
   python -m hitomane_agent plan                                         予約リスト（ヒトマネ実行設定）のグループ
   python -m hitomane_agent generate (--group 1 [--group 2 …] | --all)   ツールで原稿を作る（入稿・使用履歴の記録はしない）
   python -m hitomane_agent compare --generated ツール_… [--gas-sheet ヒトマネ出力_…]   GAS の原稿と見比べる
@@ -127,7 +129,8 @@ def cmd_generate(args) -> int:
         print(f"予約リストにないグループです：{'、'.join(sorted(wanted - known))}（あるもの：{'、'.join(known) or 'なし'}）"
               + ("" if args.include_done else "。GAS で実行済みの行も使うときは --include-done を付けてください"))
         return 1
-    results = generator.run(bank, usage, targets, only_groups=wanted)
+    from . import plan
+    results = generator.run(bank, plan.merge_usage(usage), targets, only_groups=wanted)
     code = 0
     for r in results:
         if r.error:
@@ -148,6 +151,105 @@ def cmd_generate(args) -> int:
             code = 2
     print("\n使用履歴には書いていません（確かめている間は読むだけ）。")
     return code
+
+
+def cmd_plan_sheet(args) -> int:
+    """【AI用】に入稿予定表のシートを作る（あれば見出しとプルダウンを整える。入っている予定は消さない）。"""
+    from . import generator, plan
+
+    settings = _settings(args)
+    base, ai = _books(settings)
+    grids, _ = generator.load_base(base)
+    for line in plan.setup_sheet(ai, generator.build_bank(grids)):
+        print(line)
+    return 0
+
+
+def cmd_schedule(args) -> int:
+    """入稿予定表の今日の行（--row ならその行）を、作る → チェック → 入稿 → 実行結果を書く、まで行う。"""
+    from datetime import date
+
+    from . import generated, generator, plan
+
+    settings, rules = _settings(args), config.load("rules.json")
+    today = date.fromisoformat(args.date) if args.date else date.today()
+    base, ai = _books(settings)
+    try:
+        rows = plan.read_plan(ai.worksheet(plan.SHEET).get_all_values(), today)
+    except Exception as e:
+        print(f"入稿予定表を読めませんでした：{e}")
+        return 1
+    targets = [p for p in rows if p.row in args.row] if args.row else [p for p in rows if p.run_date == today]
+    if not args.force:
+        finished = plan.done()
+        for p in [p for p in targets if p.key in finished]:
+            print(f"入稿予定表 {p.row}行目は {finished[p.key]['finished_at']} に実行済みです（やり直すときは --force）")
+        targets = [p for p in targets if p.key not in finished]
+    if not targets:
+        print(f"入稿予定表に、{today:%Y/%m/%d} に実行する行がありません" if not args.row else "実行する行がありません")
+        return 0
+    infos = {}
+    if not args.dry_run:
+        cs = accounts.companies(settings)
+        for p in targets:
+            if p.company not in infos:
+                try:
+                    c = accounts.find_company(cs, p.company)
+                    infos[p.company] = accounts.login_info(settings, company=c["code"])
+                except Exception as e:
+                    print(f"{p.row}行目：{p.company} の入稿先が分かりません：{e}")
+                    return 1
+    print(f"入稿予定表から {len(targets)}件 を{'テスト（作ってチェックするだけ）' if args.dry_run else '実行'}します")
+    for p in targets:
+        to = f" → {accounts.label(infos[p.company])}" if p.company in infos else ""
+        print(f"  {p.row}行目: {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / {p.commute} / "
+              f"{p.count or '勤務地の数'}件 / {p.status}{to}")
+    if not args.dry_run and not args.yes and input("原稿を作ってヒトマネに入稿します。よろしいですか？ [y/N] > ").strip().lower() != "y":
+        print("中止しました")
+        return 1
+
+    print("\n土台を読んでいます…")
+    grids, usage = generator.load_base(base)
+    bank = generator.build_bank(grids)
+    try:
+        gen_targets = plan.to_targets(targets, today, plan.entry_numbers())
+    except RuntimeError as e:
+        print(e)
+        return 1
+    results = {int(r.group_id.removeprefix("予定")): r
+               for r in generator.run(bank, plan.merge_usage(usage), gen_targets, today=today, stop_on_error=False)}
+    failed = 0
+    for p in targets:
+        print(f"\n=== 入稿予定表 {p.row}行目 ===")
+        r = results.get(p.row)
+        if r is None or r.error or not r.rows:
+            text = f"作れませんでした：{r.error if r else '前の行のエラーで止まりました'}"
+            ok = False
+        else:
+            name = generated.save(r, {"source": "入稿予定表", "plan_row": p.row})
+            ms = generated.load(name)
+            res = workflow.check(ms, rules)
+            print(f"{name}：原稿 {len(ms.rows)}件、チェック {res['status']}（{res['report']}）")
+            if res["status"] == "NG":
+                text, ok = f"チェックが NG のため入稿しません（{datetime.now():%m/%d %H:%M}）{name}", False
+            elif args.dry_run:
+                text, ok = f"テスト済み（{datetime.now():%m/%d %H:%M}）{len(ms.rows)}件・チェック {res['status']} {name}", True
+            else:
+                paths = workflow.write_csvs(ms, settings, rules)
+                code, text = _import(ms, infos[p.company], paths, settings, rules, args.headed, stop_over_limit=True)
+                ok = code == 0
+                if ok:
+                    text += f" {name}"
+                    plan.mark_done(p, text)
+        print(text)
+        failed += 0 if ok else 1
+        if not args.dry_run:
+            try:
+                plan.write_result(ai, p.row, ("" if ok else "❌") + text)
+            except Exception as e:
+                print(f"（実行結果を入稿予定表に書けませんでした：{e}）")
+    print(f"\n{len(targets)}件中 {len(targets) - failed}件 {'テストできました' if args.dry_run else '入稿しました'}")
+    return 0 if not failed else 2
 
 
 def cmd_compare(args) -> int:
@@ -206,17 +308,30 @@ def cmd_upload(args) -> int:
     if args.dry_run:
         print("--dry-run のため、ここで止めます（取り込みはしていません）")
         return 0
-    up = HitomaneUploader(info, settings["hitomane"], config.OUTPUT_DIR / ms.name, headed=args.headed)
+    ask = None if args.yes else (lambda: input(f"{accounts.label(info)} に取り込みますか？ [y/N] > ").strip().lower() == "y")
+    code, _ = _import(ms, info, paths, settings, rules, args.headed, ask)
+    return code
+
+
+def _import(ms, info, paths, settings, rules, headed=False, ask=None, stop_over_limit=False) -> tuple[int, str]:
+    """ログインして全件数・拠点を確かめてから取り込む。（終了コード, 実行結果の一言）。"""
+    from .uploader import HitomaneUploader
+
+    key = accounts.account_key(info)
+    up = HitomaneUploader(info, settings["hitomane"], config.OUTPUT_DIR / ms.name, headed=headed)
     acct = up.account()
     workflow.save_total(key, acct["total"], info.get("company", ""))
     stop = workflow.branch_problem(ms, acct["branches"], info.get("company", ""))
+    if not stop and stop_over_limit and acct["total"] is not None and acct["total"] + len(ms.rows) > rules["total_limit"]:
+        stop = (f"募集管理の全件数 {acct['total']:,}件に {len(ms.rows):,}件を足すと上限 {rules['total_limit']:,}件を超えます。"
+                "先に取り下げてください")
     if stop:
         print(f"入稿しません: {stop}")
-        return 1
+        return 1, f"入稿しません：{stop}"
     print(workflow.total_note(acct["total"], len(ms.rows), rules))
-    if not args.yes and input(f"{accounts.label(info)} に取り込みますか？ [y/N] > ").strip().lower() != "y":
+    if ask is not None and not ask():
         print("中止しました")
-        return 1
+        return 1, "中止しました"
     results = up.upload(paths)
     workflow.record_upload(ms, results, key, info.get("company", ""))
     ok = bool(results) and all(r.ok for r in results) and len(results) == len(paths)
@@ -224,7 +339,15 @@ def cmd_upload(args) -> int:
         print(f"{'成功' if r.ok else '失敗'}: {r.file} {r.message}\n  {r.row_text}\n  画面: {r.screenshot}")
     if len(results) < len(paths):
         print(f"失敗したため、残りの {len(paths) - len(results)} ファイルは取り込んでいません")
-    return 0 if ok else 2
+    from . import generated, plan
+    if ok and generated.exists(ms.name):
+        meta = generated.meta(ms.name)
+        plan.record_usage(meta)  # 次に作るときに、入稿した職種名・仕事内容を避ける（このパソコンの記録）
+        if ms.rows:
+            plan.remember_number(meta["company"], ms.rows[-1].get("募集番号", ""))
+    if ok:
+        return 0, f"入稿済み（{datetime.now():%m/%d %H:%M}）{len(ms.rows)}件 → {accounts.label(info)}"
+    return 2, f"入稿が途中で止まりました（{datetime.now():%m/%d %H:%M}）取込ファイル一覧を確かめてください"
 
 
 def cmd_login(args) -> int:
@@ -374,6 +497,18 @@ def main(argv=None) -> int:
     s.add_argument("--all", action="store_true", help="GAS がまだ実行していない全部のグループ")
     s.add_argument("--include-done", action="store_true", help="GAS で実行済み（実行状況の入った）行も使う")
     s.set_defaults(func=cmd_generate)
+
+    s = sub.add_parser("plan-sheet", help="【AI用】に入稿予定表のシートを作る・整える（見出しとプルダウン。予定は消さない）")
+    s.set_defaults(func=cmd_plan_sheet)
+
+    s = sub.add_parser("schedule", help="入稿予定表の今日の行を、作る → チェック → 入稿 → 実行結果を書く、まで行う")
+    s.add_argument("--row", type=int, action="append", help="この行だけ（入稿予定表の行番号。何度でも指定できる）")
+    s.add_argument("--date", help="今日の代わりにこの日の行（2026-11-20 の形）")
+    s.add_argument("--dry-run", action="store_true", help="テスト：作ってチェックするだけ（入稿しない。予定表にも書かない）")
+    s.add_argument("--force", action="store_true", help="実行済みの行もやり直す")
+    s.add_argument("--yes", action="store_true", help="確認を聞かずに入稿する")
+    s.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
+    s.set_defaults(func=cmd_schedule)
 
     s = sub.add_parser("compare", help="GAS で作った原稿とツールで作った原稿を列ごとに見比べる")
     s.add_argument("--generated", required=True, help="ツールで作った原稿（ツール_…）")

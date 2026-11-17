@@ -717,12 +717,13 @@ def output_name(first: Target, today: date) -> str:
 
 
 def run(bank: Bank, usage: Usage, targets: list[Target], only_groups: set | None = None, seed=None,
-        now: datetime | None = None, today: date | None = None) -> list[GroupResult]:
+        now: datetime | None = None, today: date | None = None, stop_on_error: bool = True) -> list[GroupResult]:
     """予約行を GAS と同じ順番（グループの出てきた順・グループ内の番号順）で生成する。
 
     募集番号の先頭が空の行は、同じ会社の直前の予約行の続きの番号を使う（グループをまたいでも引き継ぐ）。そのため、
     only_groups で一部のグループだけ作るときも、前のグループの番号は数えて引き継ぐ（原稿は作らない）。
     GAS はエラーの行で全体を止めるので、エラーが出たグループのあとのグループは作らない。
+    stop_on_error=False なら、エラーのグループだけ飛ばして続ける（入稿予定表の行はそれぞれ別の予定のため）。
     """
     now = now or datetime.now()
     today = today or now.date()
@@ -772,9 +773,12 @@ def run(bank: Bank, usage: Usage, targets: list[Target], only_groups: set | None
                     continuation[t.company] = _entry_numbers(prefix)(target_count(bank, t))
         except GenerateError as e:
             res.error = str(e)
+            res.rows, res.title_counts, res.content_counts = [], [], []
             if build:
                 results.append(res)
-            break
+            if stop_on_error:
+                break
+            continue
         if build:
             if res.skipped and not res.rows:
                 res.error = "旧FMT の予約です。ヒトマネに取り込めるのは新FMT だけのため、ツールでは作りません"

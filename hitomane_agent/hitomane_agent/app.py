@@ -1,6 +1,8 @@
 """操作画面。app.bat から起動すると、パソコンの中だけで動く画面がブラウザで開く。
 
 画面からできること
+  - 原稿を作る：入稿予定表（担当者が予定を入れるシート）の今日の行を、作る → チェック → 入稿 → 実行結果を書く、まで行う。
+    「テスト」は作ってチェックするだけ。下の予約リストは GAS との見比べ用
   - 原稿を作る：予約リスト（ヒトマネ実行設定）のグループを、GAS の③の代わりにツールで原稿にする（入稿・使用履歴の記録はしない）。
     作った原稿は入稿タブの「ツールで作った原稿」に並び、チェック・GAS の原稿との比較・入稿ができる
   - 入稿：募集管理の全件数（上限まであと何件か）と、出力シート（ヒトマネ出力_…）の一覧と、チェック・入稿の状態を見る
@@ -131,6 +133,43 @@ class App:
         settings = self._settings()
         gc = gspread.service_account(filename=str(config.ROOT / settings["service_account_file"]))
         return generator.load_config(gc.open_by_key(settings["spreadsheet_id"]))
+
+    # ---- 入稿予定表 ----
+    def _schedule_table(self) -> list[list] | None:
+        """【AI用】の入稿予定表（無ければ None）。"""
+        import gspread
+
+        from . import plan
+        settings = self._settings()
+        gc = gspread.service_account(filename=str(config.ROOT / settings["service_account_file"]))
+        try:
+            return gc.open_by_key(settings["spreadsheet_id"]).worksheet(plan.SHEET).get_all_values()
+        except gspread.WorksheetNotFound:
+            return None
+
+    def schedule(self) -> dict:
+        from . import plan
+        table = self._schedule_table()
+        if table is None:
+            return {"exists": False, "rows": []}
+        today = datetime.now().date()
+        finished = plan.done()
+        rows = [{"row": p.row, "date": f"{p.run_date:%Y/%m/%d}" if p.run_date else "（日付なし）",
+                 "today": p.run_date == today, "company": p.company, "category": p.category,
+                 "night": p.night, "commute": p.commute, "status": p.status, "count": p.count or "勤務地の数",
+                 "title": p.title_choice, "prefix": p.prefix, "result": p.result, "done": p.key in finished}
+                for p in plan.read_plan(table, today)]
+        return {"exists": True, "rows": rows, "numbers": plan.entry_numbers()}
+
+    def schedule_args(self, body: dict) -> tuple[str, list[str]]:
+        args = ["schedule", "--yes"]
+        rows = [int(r) for r in body.get("rows") or []]
+        for r in rows:
+            args += ["--row", str(r)]
+        if body.get("dry_run"):
+            args.append("--dry-run")
+        what = f"{'・'.join(map(str, rows))}行目" if rows else "今日の行"
+        return f"入稿予定表の{what}を{'テスト' if body.get('dry_run') else '実行'}", args
 
     def plan(self) -> list[dict]:
         """予約リスト（ヒトマネ実行設定）のグループ。"""
@@ -379,13 +418,21 @@ label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--sub)
 pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px;overflow:auto;font-size:12px;white-space:pre-wrap;margin:0}
 .note{color:var(--sub);font-size:12px;margin:4px 0 0}.card>p.note{margin-bottom:12px}.ok,.OK{color:var(--ok)}.ng,.NG{color:var(--danger)}.warn,.要確認{color:var(--warn)}
 .OK,.NG,.要確認{font-weight:600}.status{font-size:13px;margin-bottom:8px}.empty{color:var(--sub);padding:12px 0}.big{font-size:20px;font-weight:600}
-.coname{display:inline-block;background:#ddf4ff;color:#0969da;border-radius:12px;padding:1px 10px;font-weight:600;font-size:13px}
+tr.today td{background:#fff8c5}.coname{display:inline-block;background:#ddf4ff;color:#0969da;border-radius:12px;padding:1px 10px;font-weight:600;font-size:13px}
 </style></head><body>
 <header><h1>ヒトマネ入稿ツール</h1><span id="today"></span><span id="who"></span>
   <label class="co">会社<select id="company"><option value="">読み込んでいます…</option></select></label></header>
-<nav><button data-tab="make">原稿を作る</button><button data-tab="post" class="on">入稿</button><button data-tab="takedown">取り下げ</button><button data-tab="companies">会社</button><button data-tab="update">更新</button><button data-tab="check">設定の確認</button></nav>
+<nav><button data-tab="make" class="on">原稿を作る</button><button data-tab="post">入稿</button><button data-tab="takedown">取り下げ</button><button data-tab="companies">会社</button><button data-tab="update">更新</button><button data-tab="check">設定の確認</button></nav>
 <main>
-<section id="make">
+<section id="make" class="on">
+  <div class="card"><h2>入稿予定表</h2>
+    <p class="note">【AI用】ヒトマネ 求人原稿自動生成 の「入稿予定表」シートです。担当者は、実行日・会社・職種・夜勤有無・原稿数などを入れるだけです。<br>
+    「今日の行をすべて実行」で、実行日が今日の行を、原稿を作る → チェック → 会社のヒトマネに入稿 → 実行結果を書く、まで行います（チェックが NG の行や、上限の 50,000件を超える行は入稿しません）。<br>
+    募集番号の先頭が空欄なら、その会社にツールで前回入稿した続きの番号を使います。取り下げは予定表では行いません（「取り下げ」タブで件数を確かめてから行います）。</p>
+    <div id="sched">読み込んでいます…</div>
+    <div class="row" style="margin-top:12px"><button class="btn primary" onclick="schedRun()">今日の行をすべて実行</button>
+      <button class="btn" onclick="schedTest()">今日の行をすべてテスト</button><button class="btn" onclick="loadSched()">表を読み直す</button>
+      <button class="btn" onclick="start('/api/plan_sheet',{},'【AI用】ヒトマネに入稿予定表のシートを作ります（あれば見出しとプルダウンを整えます。入っている予定は消しません）。よろしいですか？')">入稿予定表を作る・整える</button></div></div>
   <div class="card"><h2>予約リスト（ヒトマネ実行設定）</h2>
     <p class="note">【AI用】ヒトマネ 求人原稿自動生成 の「ヒトマネ実行設定」シートの予約を、GAS の「③予約リストを一括実行」と同じ作り方でツールが原稿にします。
     グループ番号（1-1, 1-2 …）が同じ行は1つの原稿にまとめます。<br>
@@ -396,7 +443,7 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
       <button class="btn" onclick="loadPlan()">予約リストを読み直す</button>
       <label style="flex-direction:row;align-items:center;gap:6px;color:var(--ink)"><input type="checkbox" id="p_done">GAS で実行済みの行も使う</label></div></div>
 </section>
-<section id="post" class="on">
+<section id="post">
   <div class="card"><h2>募集管理の全件数 <span class="coname co_name"></span></h2>
     <div id="total" class="status">読み込んでいます…</div>
     <div class="row"><button class="btn" onclick="loginCo()">ログインして全件数を確かめる</button></div>
@@ -455,7 +502,7 @@ const coName=()=>(COS.find(c=>c.code===CO())||{}).company||"";
 const withCo=p=>p+(p.includes("?")?"&":"?")+"company="+encodeURIComponent(CO());
 const needCo=()=>{if(!CO()){alert("上の「会社」で会社を選んでください");return false}return true};
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");
-  if(b.dataset.tab==="make")loadPlan();if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="takedown")loadTakedown();if(b.dataset.tab==="companies")loadCompanies()});
+  if(b.dataset.tab==="make"){loadSched();loadPlan()}if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="takedown")loadTakedown();if(b.dataset.tab==="companies")loadCompanies()});
 
 function showCompanies(){const cur=CO();let saved="";try{saved=localStorage.getItem("company")||""}catch(e){}
   company.innerHTML=COS.length?'<option value="">会社を選んでください</option>'+COS.map(c=>`<option value="${esc(c.code)}">${esc(c.company)}（${esc(c.code)}）</option>`).join(""):'<option value="">会社がありません（会社タブを見てください）</option>';
@@ -490,6 +537,20 @@ async function loadGens(){gens.textContent="読み込んでいます…";try{con
    <td><button class="btn" data-n="${esc(s.name)}" onclick="check(this.dataset.n,this,true)">チェック</button> <button class="btn" data-n="${esc(s.name)}" onclick="start('/api/compare',{name:this.dataset.n})">GAS と比べる</button>
     <button class="btn primary" data-n="${esc(s.name)}" data-c="${esc(s.company)}" onclick="upload(this.dataset.n,this,true,this.dataset.c)" ${CO()&&s.status&&s.status!=="NG"&&!s.uploaded_same?"":"disabled"}>入稿</button></td></tr>`).join("")+"</table>"
    :'<div class="empty">まだ作っていません。「原稿を作る」タブで作ってください</div>'}catch(e){gens.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+let SCHED=[];
+async function loadSched(){sched.textContent="読み込んでいます…";try{const d=await api("/api/schedule");SCHED=d.rows;
+  if(!d.exists){sched.innerHTML='<div class="empty">入稿予定表のシートがまだありません。「入稿予定表を作る・整える」で作ってください</div>';return}
+  const nums=Object.entries(d.numbers||{}).map(([k,v])=>`${esc(k)}：${esc(v)}`).join("　");
+  sched.innerHTML=(d.rows.length?"<table><tr><th>行</th><th>実行日</th><th>会社</th><th>職種</th><th>夜勤</th><th>通勤/入寮</th><th>原稿数</th><th>ステータス</th><th>職種名選択</th><th>実行結果</th><th></th></tr>"+d.rows.map(r=>`<tr class="${r.today?"today":""}">
+   <td>${r.row}</td><td>${esc(r.date)}</td><td>${esc(r.company)}</td><td>${esc(r.category)}</td><td>${r.night?"あり":"なし"}</td><td>${esc(r.commute)}</td><td>${esc(r.count)}</td><td>${esc(r.status)}</td>
+   <td>${esc(r.title)}</td><td class="${r.result.startsWith("❌")?"ng":""}">${esc(r.result)}${r.done?' <span class="ok">（実行済み）</span>':""}</td>
+   <td><button class="btn" onclick="schedTest(${r.row})">テスト</button> <button class="btn primary" onclick="schedRun(${r.row})">この行を実行</button></td></tr>`).join("")+"</table>"
+   :'<div class="empty">予定がまだ入っていません</div>')+(nums?`<p class="note">次に使う募集番号：${nums}</p>`:"")}catch(e){sched.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+function schedRows(row){return row?SCHED.filter(r=>r.row===row):SCHED.filter(r=>r.today&&!r.done)}
+function schedRun(row){const l=schedRows(row);if(!l.length)return alert("今日の行で、まだ実行していない行がありません");
+  start("/api/schedule",{rows:row?[row]:[]},`入稿予定表の ${l.map(r=>r.row+"行目（"+r.company+"・"+r.category+"・"+r.count+"）").join("、")} を実行します。\n\n原稿を作ってチェックし、それぞれの会社のヒトマネに入稿します。よろしいですか？`)}
+function schedTest(row){const l=schedRows(row);if(!l.length)return alert("今日の行で、まだ実行していない行がありません");
+  start("/api/schedule",{rows:row?[row]:[],dry_run:true},`入稿予定表の ${l.map(r=>r.row+"行目").join("、")} をテストします（作ってチェックするだけで、入稿しません）。よろしいですか？`)}
 async function loadPlan(){plan.textContent="読み込んでいます…";try{const l=await api("/api/plan");
   plan.innerHTML=l.length?"<table><tr><th></th><th>グループ</th><th>会社・職種</th><th>FMT</th><th>作成日</th><th>予約行（原稿数）</th><th>GAS の実行状況</th><th>ツールで作った原稿</th></tr>"+l.map(g=>`<tr>
    <td><input type="checkbox" class="p_g" value="${esc(g.group)}" ${g.format==="新FMT"?"":"disabled"}></td><td>${esc(g.group)}</td><td>${esc(g.company)}<div class="note">${esc(g.category)}</div></td>
@@ -538,7 +599,7 @@ async function poll(){clearTimeout(timer);try{const j=await api("/api/job?since=
   if(j.lines.length){log.textContent+=j.lines.join("\n")+"\n";log.scrollTop=log.scrollHeight}since=j.next??since;
   job_state.innerHTML=j.running?'<span class="warn">実行中…（この画面を閉じても止まりませんが、黒い画面は閉じないでください）</span>':(j.code===0?'<span class="ok">終わりました</span>':j.code==null?"":`<span class="ng">止まりました（コード ${j.code}）。記録を確認してください</span>`);
   if(j.running)timer=setTimeout(poll,1500);else if(j.title)loadCompanies()}catch(e){timer=setTimeout(poll,3000)}}
-loadOverview().then(loadCompanies);poll();
+loadOverview().then(loadCompanies);loadSched();loadPlan();poll();
 </script></body></html>
 """
 
@@ -575,6 +636,8 @@ def make_handler(app: App):
                     return self._send(200, app.companies())
                 if u.path == "/api/plan":
                     return self._send(200, app.plan())
+                if u.path == "/api/schedule":
+                    return self._send(200, app.schedule())
                 if u.path == "/api/generated":
                     return self._send(200, app.generated_list(company))
                 if u.path == "/api/job":
@@ -615,6 +678,10 @@ def make_handler(app: App):
                     return self._send(200, app.prepare(body["name"], body.get("company"), gen=bool(body.get("generated"))))
                 if u.path == "/api/generate":
                     return self._send(200, app.run(*app.generate_args(body)))
+                if u.path == "/api/schedule":
+                    return self._send(200, app.run(*app.schedule_args(body)))
+                if u.path == "/api/plan_sheet":
+                    return self._send(200, app.run("入稿予定表を作る・整える", ["plan-sheet"]))
                 if u.path == "/api/compare":
                     from . import generated
                     if not generated.exists(body.get("name", "")):
