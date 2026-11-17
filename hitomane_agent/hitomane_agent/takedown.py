@@ -51,6 +51,24 @@ class Rewritten:
     new_date: str = ""
 
 
+def pick_branch(ms: Manuscript, branches: list[dict]) -> dict:
+    """取り出した原稿の拠点（拠点コードが1つに決まるとき）。会社に拠点がいくつあっても、原稿の拠点で決める。
+    （GritMate は拠点が6つあるが、原稿は全部 Mat001。2026-11-17 に拠点コードで検索して確かめた）"""
+    counts: dict[str, int] = {}
+    for r in ms.rows:
+        code = r.get("拠点コード", "").strip()
+        counts[code] = counts.get(code, 0) + 1
+    if len(counts) != 1:
+        detail = "、".join(f"{c or '（空欄）'} {n}件" for c, n in sorted(counts.items()))
+        raise RuntimeError(f"取り出した原稿の拠点が1つに決まりません（{detail}）。取り下げを止めます")
+    code = next(iter(counts))
+    b = next((x for x in branches if x["code"] == code), None)
+    if b is None:
+        have = "、".join(f"{x['code']} {x['name']}" for x in branches) or "読めませんでした"
+        raise RuntimeError(f"原稿の拠点コード {code or '（空欄）'} が、この会社の拠点の一覧（{have}）にありません。取り下げを止めます")
+    return b
+
+
 def rewrite(ms: Manuscript, cond: Conditions, branch: dict, today: date) -> Rewritten:
     """取り出した原稿（新フォーマット）のうち、条件に合う行だけを書き換えて返す。"""
     if ms.headers != NEW_FORMAT:

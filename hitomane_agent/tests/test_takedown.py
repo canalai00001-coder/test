@@ -88,5 +88,25 @@ class TestPrepared(unittest.TestCase):
         self.assertIsNone(takedown.find_prepared("Minami", self.cond, date(2026, 11, 16)))
 
 
+class TestPickBranch(unittest.TestCase):
+    BRANCHES = [{"code": "Mat001", "name": "GritMate株式会社"}, {"code": "AA001", "name": "無し"},
+                {"code": "ng001", "name": "非公開"}]
+
+    def ms(self, *codes):
+        return Manuscript("x", table(*[row(**{"募集番号": f"n{i}", "拠点コード": c}) for i, c in enumerate(codes)]))
+
+    def test_branch_of_jobs(self):
+        self.assertEqual(takedown.pick_branch(self.ms("Mat001", "Mat001"), self.BRANCHES),
+                         {"code": "Mat001", "name": "GritMate株式会社"})
+
+    def test_two_branches_stop(self):
+        with self.assertRaisesRegex(RuntimeError, "Mat001 1件、ng001 1件"):
+            takedown.pick_branch(self.ms("Mat001", "ng001"), self.BRANCHES)
+
+    def test_unknown_branch_stops(self):
+        with self.assertRaisesRegex(RuntimeError, "B001 が、この会社の拠点の一覧"):
+            takedown.pick_branch(self.ms("B001"), self.BRANCHES)
+
+
 if __name__ == "__main__":
     unittest.main()

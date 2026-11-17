@@ -87,6 +87,29 @@ class TestTakedownCli(unittest.TestCase):
         self.assertIn("取り下げるものはありません", out)
         self.assertEqual((self.st.export_reserved, self.st.imports), (0, []))
 
+    def test_unused_branches_do_not_stop(self):
+        # GritMate のように、原稿の無い拠点がほかにあってもよい（原稿の拠点で決める）
+        self.st.branches += [("x", "AA001", "-", "無し"), ("-", "ng001", "-", "非公開")]
+        code, out = self.run_cli("--prepare-only")
+        self.assertEqual(code, 0, out)
+        self.assertIn("拠点: CB株式会社（B001）", out)
+        self.assertIn("取り下げる原稿: 2件", out)
+
+    def test_jobs_of_two_branches_stop(self):
+        self.st.branches.append(("x", "B002", "-", "別の拠点"))
+        self.st.jobs.append(row(**{"募集番号": "e", "開始日": "2026/10/02", "ステータス": "掲載",
+                                   "拠点コード": "B002", "拠点": "別の拠点"}))
+        code, out = self.run_cli("--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("拠点が1つに決まりません（B001 2件、B002 1件）", out)
+        self.assertEqual(self.st.imports, [])
+
+    def test_branch_not_in_list_stops(self):
+        self.st.branches = [("x", "B009", "-", "ほか")]
+        code, out = self.run_cli("--prepare-only")
+        self.assertEqual(code, 1)
+        self.assertIn("拠点の一覧（B009 ほか）にありません", out)
+
     def test_bad_dates(self):
         buf = io.StringIO()
         with redirect_stdout(buf):

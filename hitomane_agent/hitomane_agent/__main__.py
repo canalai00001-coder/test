@@ -202,7 +202,13 @@ def cmd_takedown(args) -> int:
         if not res["file"]:
             print("条件に合う原稿はありません。取り下げるものはありません")
             return 0
-        rw = takedown.rewrite(read_csv(Path(res["file"]).read_bytes(), "取り出し"), cond, res["branch"], today)
+        exported = read_csv(Path(res["file"]).read_bytes(), "取り出し")
+        try:
+            branch = takedown.pick_branch(exported, res["branches"])
+        except RuntimeError as e:
+            print(e)
+            return 1
+        rw = takedown.rewrite(exported, cond, branch, today)
         files = []
         from .csv_export import split_rows, to_csv_bytes
         for n, part in enumerate(split_rows(rw.manuscript, rules["max_rows_per_file"]), start=1):
@@ -210,7 +216,7 @@ def cmd_takedown(args) -> int:
             f.write_bytes(to_csv_bytes(part, **settings["csv"]))
             files.append(str(f))
         prepared = {"searched": res["count"], "rows": len(rw.manuscript.rows), "skipped": rw.skipped,
-                    "new_date": rw.new_date, "branch": res["branch"], "files": files if rw.manuscript.rows else []}
+                    "new_date": rw.new_date, "branch": branch, "files": files if rw.manuscript.rows else []}
         takedown.save_prepared(key, cond, {**prepared, "company": info.get("company", "")}, today)
     b = prepared["branch"]
     print(f"拠点: {b['name']}（{b['code']}）\n検索の件数: {prepared['searched']}件\n取り下げる原稿: {prepared['rows']}件")

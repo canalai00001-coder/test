@@ -6,6 +6,7 @@ import os
 import re
 
 from playwright.sync_api import Page
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 # まだ終わっていない状態の文言（取込・取出ファイル一覧のステータス）
 PENDING = ("待機中", "進行中", "処理中", "実行中", "取込中", "取出中", "準備中")
@@ -20,8 +21,13 @@ def launch(p, headed: bool = False):
 
 
 def login(page: Page, info: dict) -> None:
-    """ログインする。できなければ RuntimeError（パスワードは文言に入れない）。"""
-    resp = page.goto(info["url"])
+    """ログインする。できなければ RuntimeError（パスワードは文言に入れない）。
+    ログイン画面がたまに60秒たっても開き終わらないことがある（2026-11-17 に2回続けて。直後は0.3秒で開いた）ので、
+    画面の中身が読めた時点で進め、時間切れのときは1回だけ開き直す。"""
+    try:
+        resp = page.goto(info["url"], wait_until="domcontentloaded")
+    except PlaywrightTimeout:
+        resp = page.goto(info["url"], wait_until="domcontentloaded")
     if resp is not None and resp.status == 403:
         raise RuntimeError("管理画面を開けませんでした（403）。社内のネットワークから実行してください")
     pw = page.locator("input[type=password]")

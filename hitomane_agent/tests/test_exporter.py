@@ -28,19 +28,15 @@ class TestExporter(unittest.TestCase):
         self.ex = HitomaneExporter(self.info, OPTS, self.out, log=lambda *a: None)
         self.cond = Conditions(date(2026, 10, 1), date(2026, 10, 31))
 
-    def test_branch(self):
-        self.assertEqual(self.ex.branch(), {"code": "B001", "name": "CB株式会社"})
-
-    def test_two_branches_stop(self):
-        self.st.branches.append(("x", "B002", "-", "別の拠点"))
-        with self.assertRaises(RuntimeError):
-            self.ex.branch()
+    def test_branches(self):
+        self.st.branches.append(("x", "B002", "-", "別の拠点"))  # 拠点がいくつあっても止めない
+        self.assertEqual(self.ex.branches(), [{"code": "B001", "name": "CB株式会社"}, {"code": "B002", "name": "別の拠点"}])
 
     def test_export_by_conditions(self):
         res = self.ex.export(self.cond, self.out / "取り出し.csv")
         self.assertEqual(self.st.last_filter, (date(2026, 10, 1), date(2026, 10, 31), True))
         self.assertEqual(res["count"], 2)
-        self.assertEqual(res["branch"], {"code": "B001", "name": "CB株式会社"})
+        self.assertEqual(res["branches"], [{"code": "B001", "name": "CB株式会社"}])
         ms = read_csv(Path(res["file"]).read_bytes(), "x")
         self.assertEqual([r["募集番号"] for r in ms.rows], ["a", "b"])
         self.assertFalse(self.st.import_reserved)

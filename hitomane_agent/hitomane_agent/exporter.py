@@ -39,18 +39,12 @@ class HitomaneExporter:
             finally:
                 browser.close()
 
-    def branch(self) -> dict:
-        return self._run(self._branch)
-
-    def _branch(self, page: Page) -> dict:
-        """アカウントの拠点（拠点の一覧の行が1つだけのとき）。列：エリア・拠点コード・…・拠点名。"""
-        rows = site.branches(page, self.info)
-        if len(rows) != 1:
-            raise RuntimeError(f"この会社の拠点が {len(rows)}つあります。どの拠点の原稿かを決められないため止めます")
-        return rows[0]
+    def branches(self) -> list[dict]:
+        """会社の拠点の一覧（拠点がいくつあってもよい。どの拠点の原稿を下げるかは、取り出した原稿で決める）。"""
+        return self._run(lambda page: site.branches(page, self.info))
 
     def export(self, cond: Conditions, out_path: Path) -> dict:
-        """{"count": 検索の件数, "branch": 拠点, "file": 落とした CSV（0件なら None）}"""
+        """{"count": 検索の件数, "branches": 会社の拠点の一覧, "file": 落とした CSV（0件なら None）}"""
         return self._run(lambda page: self._export(page, cond, Path(out_path)))
 
     def _search(self, page: Page, cond: Conditions) -> int | None:
@@ -73,14 +67,14 @@ class HitomaneExporter:
         return site.count(page)
 
     def _export(self, page: Page, cond: Conditions, out_path: Path) -> dict:
-        branch = self._branch(page)
+        branches = site.branches(page, self.info)
         page.goto(site.url(self.info, "csv_export_queues"))
         page.wait_for_load_state("networkidle")
         before = site.top_key(page)
         count = self._search(page, cond)
         self.log(f"{cond.describe()} の原稿：{count}件")
         if not count:
-            return {"count": count or 0, "branch": branch, "file": None}
+            return {"count": count or 0, "branches": branches, "file": None}
         messages = []
 
         def answer(d):  # 「ファイル取出予約」の確認ダイアログだけ OK で進める
@@ -111,7 +105,7 @@ class HitomaneExporter:
                         link.first.click()
                     d.value.save_as(str(out_path))
                     self.log(f"取り出しました：{' | '.join(cells)}")
-                    return {"count": count, "branch": branch, "file": str(out_path), "row": " | ".join(cells)}
+                    return {"count": count, "branches": branches, "file": str(out_path), "row": " | ".join(cells)}
             if i == self.poll_times:
                 break
             if i % 6 == 5:
