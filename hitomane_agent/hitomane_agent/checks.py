@@ -79,8 +79,10 @@ def parse_memo(memo: str) -> Memo | None:
 class Manuscript:
     """出力シート1枚分（1行目が見出し）。"""
 
-    def __init__(self, name: str, table: list[list[str]]):
+    def __init__(self, name: str, table: list[list[str]], segments: list[int] | None = None):
         self.name = name
+        # 予約行ごとの区切り（行の番号。0 始まり）。ツールで作った原稿だけが持つ。勤務地の重複を予約行ごとに数えるのに使う
+        self.segments = segments
         self.headers = [str(h).strip() for h in table[0]] if table else []
         width = len(self.headers)
         self.raw_rows = [(list(r) + [""] * width)[:width] for r in table[1:] if any(str(c).strip() for c in r)]
@@ -181,9 +183,24 @@ def check_sheet(ms: Manuscript, rules: dict) -> tuple[list[Issue], list[list[Iss
     for code, idx in dupes(lambda r: (r.get("募集番号") or "").strip()).items():
         for i in idx:
             results[i].append(Issue("error", "募集番号", f"募集番号「{code}」がシート内に{len(idx)}件あります（後の行で上書きされます）"))
-    for place, idx in dupes(lambda r: nfkc(r.get("勤務地_都道府県")) + nfkc(r.get("勤務地_市区町村"))).items():
-        for i in idx:
-            results[i].append(Issue("warning", "勤務地_市区町村", f"勤務地「{place}」がシート内で重複しています"))
+    place_of = lambda r: nfkc(r.get("勤務地_都道府県")) + nfkc(r.get("勤務地_市区町村"))
+    if ms.segments:
+        # GAS の⑤検品と同じく、予約行ごと（区切りごと）に勤務地の重複を数える
+        bounds = sorted(set(ms.segments) | {0}) + [len(ms.rows)]
+        for no, (a, b) in enumerate(zip(bounds, bounds[1:]), start=1):
+            seen = {}
+            for i in range(a, b):
+                if place_of(ms.rows[i]):
+                    seen.setdefault(place_of(ms.rows[i]), []).append(i)
+            for place, idx in seen.items():
+                if len(idx) > 1:
+                    for i in idx:
+                        results[i].append(Issue("warning", "勤務地_市区町村",
+                                                f"勤務地「{place}」が同じ予約行（{no}つ目）の中で重複しています"))
+    else:
+        for place, idx in dupes(place_of).items():
+            for i in idx:
+                results[i].append(Issue("warning", "勤務地_市区町村", f"勤務地「{place}」がシート内で重複しています"))
     codes = sorted({(r.get("拠点コード") or "").strip() for r in ms.rows} - {""})
     if len(codes) > 1:
         sheet.append(Issue("warning", "拠点コード", f"1枚のシートに拠点コードが{len(codes)}つあります（{'・'.join(codes)}）"))

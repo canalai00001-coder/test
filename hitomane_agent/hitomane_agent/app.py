@@ -1,6 +1,8 @@
 """操作画面。app.bat から起動すると、パソコンの中だけで動く画面がブラウザで開く。
 
 画面からできること
+  - 原稿を作る：予約リスト（ヒトマネ実行設定）のグループを、GAS の③の代わりにツールで原稿にする（入稿・使用履歴の記録はしない）。
+    作った原稿は入稿タブの「ツールで作った原稿」に並び、チェック・GAS の原稿との比較・入稿ができる
   - 入稿：募集管理の全件数（上限まであと何件か）と、出力シート（ヒトマネ出力_…）の一覧と、チェック・入稿の状態を見る
   - チェック：シートを読んでチェックし、結果（report.html）を開く
   - 入稿ボタン：止める条件と、募集管理の全件数を確かめてから、ヒトマネに取り込む（裏で upload コマンドを動かし、出力を画面に出す）
@@ -114,15 +116,71 @@ class App:
                         "uploaded_same": bool(up and up.get("hash") == rv.get("hash"))})
         return out
 
-    def check(self, name: str) -> dict:
-        ms = workflow.load_manuscript(self._settings(), sheet=name, book=self.book)
+    def _manuscript(self, name: str, gen: bool = False):
+        """出力シート（gen=False）か、ツールで作った原稿（gen=True）。"""
+        if gen:
+            from . import generated
+            return generated.load(name)
+        return workflow.load_manuscript(self._settings(), sheet=name, book=self.book)
+
+    # ---- 原稿を作る（GAS の③の代わり） ----
+    def _plan_table(self) -> list[list]:
+        import gspread
+
+        from . import generator
+        settings = self._settings()
+        gc = gspread.service_account(filename=str(config.ROOT / settings["service_account_file"]))
+        return generator.load_config(gc.open_by_key(settings["spreadsheet_id"]))
+
+    def plan(self) -> list[dict]:
+        """予約リスト（ヒトマネ実行設定）のグループ。"""
+        from . import generated, generator
+        targets = generator.read_targets(self._plan_table(), include_done=True)
+        made = {g["gas_name"]: g for g in generated.listing()}
+        today = datetime.now().date()
+        out = []
+        for gid, ts in generator.groups_of(targets).items():
+            try:
+                gas_name = generator.output_name(ts[0], today)
+            except generator.GenerateError as e:
+                gas_name = f"（{e}）"
+            out.append({"group": gid, "company": ts[0].company, "category": ts[0].category, "format": ts[0].format,
+                        "date": ts[0].creation_date, "rows": [t.sheet_row for t in ts],
+                        "counts": [t.count_raw or "勤務地数" for t in ts],
+                        "titles": [t.paired_title for t in ts if t.paired_title],
+                        "gas": "、".join(sorted({t.exec_status[:30] for t in ts if t.exec_status})),
+                        "made": (made.get(gas_name) or {}).get("name", "")})
+        return out
+
+    def generate_args(self, body: dict) -> tuple[str, list[str]]:
+        groups = [str(g).strip() for g in body.get("groups") or [] if str(g).strip()]
+        if not groups:
+            raise RuntimeError("作るグループを選んでください")
+        args = ["generate"] + [x for g in groups for x in ("--group", g)]
+        if body.get("include_done"):
+            args.append("--include-done")
+        return f"原稿を作る：グループ {'、'.join(groups)}", args
+
+    def generated_list(self, code: str = "") -> list[dict]:
+        from . import generated
+        reviews = workflow.load_state("reviews.json")
+        out = []
+        for g in generated.listing():
+            rv, up = reviews.get(g["name"], {}), (workflow.uploaded_entry(code, g["name"]) if code else None)
+            out.append({**g, "status": rv.get("status", ""), "checked_at": rv.get("checked_at", ""),
+                        "uploaded_at": up["uploaded_at"] if up else "",
+                        "uploaded_same": bool(up and up.get("hash") == rv.get("hash"))})
+        return out
+
+    def check(self, name: str, gen: bool = False) -> dict:
+        ms = self._manuscript(name, gen)
         res = workflow.check(ms, config.load("rules.json"))
         return {k: res[k] for k in ("name", "status", "rows", "counts", "sheet_issues")}
 
-    def prepare(self, name: str, code: str, acct=None) -> dict:
+    def prepare(self, name: str, code: str, acct=None, gen: bool = False) -> dict:
         """入稿の前の確認：止める理由、件数、その会社の募集管理の全件数と拠点（ログインして読む）。"""
         c = self.company(code)
-        ms = workflow.load_manuscript(self._settings(), sheet=name, book=self.book)
+        ms = self._manuscript(name, gen)
         problem = workflow.upload_problem(ms, code)
         if problem:
             return {"ok": False, "problem": problem}
@@ -140,11 +198,12 @@ class App:
                 "note": workflow.total_note(acct["total"], len(ms.rows), config.load("rules.json"))}
 
     def upload_args(self, body: dict) -> tuple[str, list[str]]:
-        c, name = self.company(body.get("company")), body["name"]
-        problem = workflow.upload_problem(workflow.load_manuscript(self._settings(), sheet=name, book=self.book), c["code"])
+        c, name, gen = self.company(body.get("company")), body["name"], bool(body.get("generated"))
+        problem = workflow.upload_problem(self._manuscript(name, gen), c["code"])
         if problem:
             raise RuntimeError(problem)
-        return f"入稿：{name} → {c['company']}", ["upload", "--sheet", name, "--company", c["code"], "--yes"]
+        return f"入稿：{name} → {c['company']}", ["upload", "--generated" if gen else "--sheet", name,
+                                                 "--company", c["code"], "--yes"]
 
     def login_args(self, body: dict) -> tuple[str, list[str]]:
         if body.get("all"):
@@ -324,8 +383,19 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
 </style></head><body>
 <header><h1>ヒトマネ入稿ツール</h1><span id="today"></span><span id="who"></span>
   <label class="co">会社<select id="company"><option value="">読み込んでいます…</option></select></label></header>
-<nav><button data-tab="post" class="on">入稿</button><button data-tab="takedown">取り下げ</button><button data-tab="companies">会社</button><button data-tab="update">更新</button><button data-tab="check">設定の確認</button></nav>
+<nav><button data-tab="make">原稿を作る</button><button data-tab="post" class="on">入稿</button><button data-tab="takedown">取り下げ</button><button data-tab="companies">会社</button><button data-tab="update">更新</button><button data-tab="check">設定の確認</button></nav>
 <main>
+<section id="make">
+  <div class="card"><h2>予約リスト（ヒトマネ実行設定）</h2>
+    <p class="note">【AI用】ヒトマネ 求人原稿自動生成 の「ヒトマネ実行設定」シートの予約を、GAS の「③予約リストを一括実行」と同じ作り方でツールが原稿にします。
+    グループ番号（1-1, 1-2 …）が同じ行は1つの原稿にまとめます。<br>
+    ここでは入稿しません。使用履歴にも書きません（GAS から切り替えるまでは読むだけ）。作った原稿は「入稿」タブの「ツールで作った原稿」に並びます。<br>
+    作れるのは新FMT だけです（旧FMT はヒトマネに取り込めないため）。</p>
+    <div id="plan">読み込んでいます…</div>
+    <div class="row" style="margin-top:12px"><button class="btn primary" onclick="makeChecked()">選んだグループをツールで作る</button>
+      <button class="btn" onclick="loadPlan()">予約リストを読み直す</button>
+      <label style="flex-direction:row;align-items:center;gap:6px;color:var(--ink)"><input type="checkbox" id="p_done">GAS で実行済みの行も使う</label></div></div>
+</section>
 <section id="post" class="on">
   <div class="card"><h2>募集管理の全件数 <span class="coname co_name"></span></h2>
     <div id="total" class="status">読み込んでいます…</div>
@@ -336,6 +406,9 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
     入稿の前に、シートの拠点コードがその会社の拠点にあるかを確かめます（会社の選び間違いのときは止まります）。</p>
     <div id="sheets">読み込んでいます…</div>
     <div class="row" style="margin-top:12px"><button class="btn" onclick="loadSheets()">一覧を読み直す</button></div></div>
+  <div class="card"><h2>ツールで作った原稿</h2>
+    <p class="note">「原稿を作る」タブで作った原稿です。作ったときにチェックしてあります。「GAS と比べる」は、同じ予約を GAS の③で作ったシート（ヒトマネ出力_…）と列ごとに見比べます。</p>
+    <div id="gens">読み込んでいます…</div></div>
 </section>
 <section id="takedown">
   <div class="card"><h2>原稿の取り下げ <span class="coname co_name"></span></h2>
@@ -382,7 +455,7 @@ const coName=()=>(COS.find(c=>c.code===CO())||{}).company||"";
 const withCo=p=>p+(p.includes("?")?"&":"?")+"company="+encodeURIComponent(CO());
 const needCo=()=>{if(!CO()){alert("上の「会社」で会社を選んでください");return false}return true};
 document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{document.querySelectorAll("nav button,section").forEach(x=>x.classList.remove("on"));b.classList.add("on");document.getElementById(b.dataset.tab).classList.add("on");
-  if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="takedown")loadTakedown();if(b.dataset.tab==="companies")loadCompanies()});
+  if(b.dataset.tab==="make")loadPlan();if(b.dataset.tab==="check")loadChecks();if(b.dataset.tab==="update")checkUpdate();if(b.dataset.tab==="takedown")loadTakedown();if(b.dataset.tab==="companies")loadCompanies()});
 
 function showCompanies(){const cur=CO();let saved="";try{saved=localStorage.getItem("company")||""}catch(e){}
   company.innerHTML=COS.length?'<option value="">会社を選んでください</option>'+COS.map(c=>`<option value="${esc(c.code)}">${esc(c.company)}（${esc(c.code)}）</option>`).join(""):'<option value="">会社がありません（会社タブを見てください）</option>';
@@ -394,7 +467,7 @@ function showCompanies(){const cur=CO();let saved="";try{saved=localStorage.getI
    :'<div class="empty">ログイン情報シートに会社の行がありません</div>'}
 async function loadCompanies(){co_list.textContent="読み込んでいます…";try{COS=await api("/api/companies");showCompanies();coChanged(false)}catch(e){co_list.innerHTML=`<span class="ng">${esc(e.message)}</span>`;company.innerHTML='<option value="">会社の一覧を読めませんでした</option>'}}
 function coChanged(save=true){if(save){try{localStorage.setItem("company",CO())}catch(e){}}
-  document.querySelectorAll(".co_name").forEach(x=>{x.textContent=coName();x.style.display=CO()?"":"none"});showTotal();loadSheets();loadTakedown()}
+  document.querySelectorAll(".co_name").forEach(x=>{x.textContent=coName();x.style.display=CO()?"":"none"});showTotal();loadSheets();loadGens();loadTakedown()}
 company.onchange=()=>coChanged(true);
 
 let DEFAULT_CO="";
@@ -409,12 +482,31 @@ async function loadSheets(){sheets.textContent="読み込んでいます…";try
    <td>${s.uploaded_same?'<span class="ok">入稿済み</span> ':""}<span class="note">${when(s.uploaded_at)}</span></td>
    <td><button class="btn" data-n="${esc(s.name)}" onclick="check(this.dataset.n,this)">チェック</button> <button class="btn primary" data-n="${esc(s.name)}" onclick="upload(this.dataset.n,this)" ${CO()&&s.status&&s.status!=="NG"&&!s.uploaded_same?"":"disabled"}>入稿</button></td></tr>`).join("")+"</table>"
    :'<div class="empty">出力シートがありません。GAS の③で原稿を作ってください</div>'}catch(e){sheets.innerHTML=`<span class="ng">一覧を読めませんでした：${esc(e.message)}</span>`}}
-async function check(name,b){b.disabled=true;b.textContent="チェック中…";try{const r=await post("/api/check",{name});await loadSheets();
+async function loadGens(){gens.textContent="読み込んでいます…";try{const l=await api(withCo("/api/generated"));
+  gens.innerHTML=l.length?`<table><tr><th>原稿</th><th>予約</th><th>原稿数</th><th>チェック</th><th>入稿${coName()?"（"+esc(coName())+"）":""}</th><th></th></tr>`+l.map(s=>`<tr><td>${esc(s.name)}<div class="note">${when(s.created_at)} に作成</div></td>
+   <td>グループ ${esc(s.group)}（${esc((s.sheet_rows||[]).join("・"))}行目）<div class="note">${esc(s.company)}・${esc(s.category)}</div>${(s.skipped||[]).length?`<div class="warn">作らなかった：${esc(s.skipped.join("、"))}</div>`:""}</td><td>${num(s.rows)}件</td>
+   <td><span class="${esc(s.status)}">${esc(s.status||"未チェック")}</span> ${s.status?`<a href="${q("/report?name="+encodeURIComponent(s.name))}" target="_blank">結果を見る</a>`:""}</td>
+   <td>${s.uploaded_same?'<span class="ok">入稿済み</span> ':""}<span class="note">${when(s.uploaded_at)}</span></td>
+   <td><button class="btn" data-n="${esc(s.name)}" onclick="check(this.dataset.n,this,true)">チェック</button> <button class="btn" data-n="${esc(s.name)}" onclick="start('/api/compare',{name:this.dataset.n})">GAS と比べる</button>
+    <button class="btn primary" data-n="${esc(s.name)}" data-c="${esc(s.company)}" onclick="upload(this.dataset.n,this,true,this.dataset.c)" ${CO()&&s.status&&s.status!=="NG"&&!s.uploaded_same?"":"disabled"}>入稿</button></td></tr>`).join("")+"</table>"
+   :'<div class="empty">まだ作っていません。「原稿を作る」タブで作ってください</div>'}catch(e){gens.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+async function loadPlan(){plan.textContent="読み込んでいます…";try{const l=await api("/api/plan");
+  plan.innerHTML=l.length?"<table><tr><th></th><th>グループ</th><th>会社・職種</th><th>FMT</th><th>作成日</th><th>予約行（原稿数）</th><th>GAS の実行状況</th><th>ツールで作った原稿</th></tr>"+l.map(g=>`<tr>
+   <td><input type="checkbox" class="p_g" value="${esc(g.group)}" ${g.format==="新FMT"?"":"disabled"}></td><td>${esc(g.group)}</td><td>${esc(g.company)}<div class="note">${esc(g.category)}</div></td>
+   <td class="${g.format==="新FMT"?"":"warn"}">${esc(g.format)}</td><td>${esc(g.date)}</td>
+   <td>${g.rows.map((r,i)=>`${r}行目（${esc(g.counts[i])}）`).join("<br>")}${g.titles.length?`<div class="note">${esc(g.titles.join("、"))}</div>`:""}</td>
+   <td>${esc(g.gas||"未実行")}</td><td>${g.made?esc(g.made):'<span class="note">まだ</span>'}</td></tr>`).join("")+"</table>"
+   :'<div class="empty">予約リストに行がありません</div>'}catch(e){plan.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
+function makeChecked(){const groups=[...document.querySelectorAll(".p_g:checked")].map(x=>x.value);if(!groups.length)return alert("作るグループを選んでください");
+  start("/api/generate",{groups,include_done:p_done.checked},`グループ ${groups.join("、")} をツールで原稿にします（入稿・使用履歴への記録はしません）。よろしいですか？`)}
+async function check(name,b,gen=false){b.disabled=true;b.textContent="チェック中…";try{const r=await post("/api/check",{name,generated:gen});await loadSheets();await loadGens();
   if(r.status==="NG")alert(`${name}：NG です（原稿 ${r.rows}件）。「結果を見る」で指摘を確かめてください`)}catch(e){alert("チェックできませんでした："+e.message);loadSheets()}}
-async function upload(name,b){if(!needCo())return;const co=CO();b.disabled=true;b.textContent="確認中…";
-  try{const r=await post("/api/prepare",{name,company:co});if(!r.ok){alert("入稿しません："+r.problem);return}
+async function upload(name,b,gen=false,planCo=""){if(!needCo())return;const co=CO();
+  if(planCo&&planCo!==coName()&&!confirm(`予約の会社は「${planCo}」ですが、上で選んでいる会社は「${coName()}」です。\nこのまま進めますか？（拠点が合わなければ入稿の前に止まります）`))return;
+  b.disabled=true;b.textContent="確認中…";
+  try{const r=await post("/api/prepare",{name,company:co,generated:gen});if(!r.ok){alert("入稿しません："+r.problem);return}
    const msg=`【${r.company}】に ${name} を取り込みます。\n\n入れる会社：${r.company}（拠点：${r.branches}）\n原稿 ${num(r.rows)}件（チェック ${r.status}）\n${r.note}`+(r.status==="要確認"?"\n\n注意の指摘があります。チェック結果を確かめましたか？":"")+"\n\n会社が合っているか確かめてください。取り込みますか？";
-   await start("/api/upload",{name,company:co},msg)}catch(e){alert("確認できませんでした："+e.message)}finally{loadSheets();loadCompanies()}}
+   await start("/api/upload",{name,company:co,generated:gen},msg)}catch(e){alert("確認できませんでした："+e.message)}finally{loadSheets();loadGens();loadCompanies()}}
 
 const tBody=()=>({from:t_from.value.trim(),to:t_to.value.trim(),company:CO()});
 t_dry.onclick=()=>{if(!needCo())return;const b=tBody();if(!b.from||!b.to)return alert("掲載開始日の期間を入れてください");start("/api/takedown",{...b,prepare_only:true})};
@@ -481,6 +573,10 @@ def make_handler(app: App):
                     return self._send(200, app.sheets(company))
                 if u.path == "/api/companies":
                     return self._send(200, app.companies())
+                if u.path == "/api/plan":
+                    return self._send(200, app.plan())
+                if u.path == "/api/generated":
+                    return self._send(200, app.generated_list(company))
                 if u.path == "/api/job":
                     since = int(q.get("since", ["0"])[0])
                     return self._send(200, app.job.to_dict(since) if app.job else {"lines": [], "running": False})
@@ -514,9 +610,16 @@ def make_handler(app: App):
                 if u.path == "/api/login":
                     return self._send(200, app.run(*app.login_args(body)))
                 if u.path == "/api/check":
-                    return self._send(200, app.check(body["name"]))
+                    return self._send(200, app.check(body["name"], bool(body.get("generated"))))
                 if u.path == "/api/prepare":
-                    return self._send(200, app.prepare(body["name"], body.get("company")))
+                    return self._send(200, app.prepare(body["name"], body.get("company"), gen=bool(body.get("generated"))))
+                if u.path == "/api/generate":
+                    return self._send(200, app.run(*app.generate_args(body)))
+                if u.path == "/api/compare":
+                    from . import generated
+                    if not generated.exists(body.get("name", "")):
+                        raise RuntimeError("ツールで作った原稿が見つかりません")
+                    return self._send(200, app.run(f"比較：{body['name']}", ["compare", "--generated", body["name"]]))
                 if u.path == "/api/upload":
                     return self._send(200, app.run(*app.upload_args(body)))
                 if u.path == "/api/takedown":

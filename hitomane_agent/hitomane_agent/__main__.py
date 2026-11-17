@@ -4,8 +4,11 @@
   python -m hitomane_agent survey --company 会社 [--headed] [--sample [募集番号]]   管理画面の画面調査
   python -m hitomane_agent login (--company 会社 | --all)               ログインの確認と募集管理の全件数・拠点
   python -m hitomane_agent list                                         出力シートの一覧とチェックの状態
-  python -m hitomane_agent check (--sheet 名前 | --csv パス)            入稿前のチェック
-  python -m hitomane_agent upload --company 会社 (--sheet 名前 | --csv パス) [--yes] [--dry-run]   ヒトマネに取り込む
+  python -m hitomane_agent plan                                         予約リスト（ヒトマネ実行設定）のグループ
+  python -m hitomane_agent generate (--group 1 [--group 2 …] | --all)   ツールで原稿を作る（入稿・使用履歴の記録はしない）
+  python -m hitomane_agent compare --generated ツール_… [--gas-sheet ヒトマネ出力_…]   GAS の原稿と見比べる
+  python -m hitomane_agent check (--sheet 名前 | --csv パス | --generated ツール_…)   入稿前のチェック
+  python -m hitomane_agent upload --company 会社 (--sheet 名前 | --csv パス | --generated ツール_…) [--yes] [--dry-run]   ヒトマネに取り込む
   python -m hitomane_agent takedown --company 会社 --from 2026/10/01 --to 2026/10/31 [--prepare-only] [--yes]   取り下げ
 
 ヒトマネは会社ごとに管理画面の URL が違う（ID・パスワードは同じ）。--company は会社名・会社のコード（o3h3 など）・会社名の一部のどれでもよい。
@@ -76,7 +79,94 @@ def cmd_list(args) -> int:
 
 
 def _manuscript(args, settings):
+    if getattr(args, "generated", None):
+        from . import generated
+        return generated.load(args.generated)
     return workflow.load_manuscript(settings, sheet=args.sheet, csv=args.csv)
+
+
+def _books(settings):
+    import gspread
+
+    from . import generator
+    gc = gspread.service_account(filename=str(config.ROOT / settings["service_account_file"]))
+    return gc.open_by_key(generator.BASE_SPREADSHEET_ID), gc.open_by_key(settings["spreadsheet_id"])
+
+
+def cmd_plan(args) -> int:
+    from . import generator
+
+    settings = _settings(args)
+    _, ai = _books(settings)
+    targets = generator.read_targets(generator.load_config(ai), include_done=True)
+    if not targets:
+        print("予約リスト（ヒトマネ実行設定）に行がありません")
+    for gid, ts in generator.groups_of(targets).items():
+        counts = "+".join(t.count_raw or "勤務地数" for t in ts)
+        done = "、".join(sorted({t.exec_status[:20] for t in ts if t.exec_status})) or "未実行"
+        print(f"グループ {gid}: {ts[0].company}・{ts[0].category}・{ts[0].format}・{len(ts)}行（{counts}）・GAS：{done}")
+    return 0
+
+
+def cmd_generate(args) -> int:
+    """予約リストのグループを、ツールで原稿にする（GAS の③の代わり）。スプレッドシートには何も書かない。"""
+    from . import generated, generator
+
+    settings, rules = _settings(args), config.load("rules.json")
+    if not args.all and not args.group:
+        print("作るグループを --group で指定してください（全部なら --all）")
+        return 1
+    base, ai = _books(settings)
+    print("土台と予約リストを読んでいます…")
+    grids, usage = generator.load_base(base)
+    bank = generator.build_bank(grids)
+    targets = generator.read_targets(generator.load_config(ai), include_done=args.include_done)
+    known = set(generator.groups_of(targets))
+    wanted = None if args.all else set(args.group)
+    if wanted and wanted - known:
+        print(f"予約リストにないグループです：{'、'.join(sorted(wanted - known))}（あるもの：{'、'.join(known) or 'なし'}）"
+              + ("" if args.include_done else "。GAS で実行済みの行も使うときは --include-done を付けてください"))
+        return 1
+    results = generator.run(bank, usage, targets, only_groups=wanted)
+    code = 0
+    for r in results:
+        if r.error:
+            print(f"\nグループ {r.group_id}：作れませんでした：{r.error}")
+            code = 2
+            if not r.rows:
+                continue
+        name = generated.save(r, {"source": "ヒトマネ実行設定"})
+        res = workflow.check(generated.load(name), rules)
+        print(f"\nグループ {r.group_id}：{name}\n  原稿 {len(r.rows)}件、チェック {res['status']}（"
+              + "、".join(f"{k} {v}件" for k, v in res["counts"].items()) + "）")
+        for i in res["sheet_issues"]:
+            print(f"  シート全体: {i['message']}")
+        print(f"  チェック表: {res['report']}")
+        if r.skipped:
+            print(f"  作らなかった予約行：{'、'.join(r.skipped)}")
+        if res["status"] == "NG":
+            code = 2
+    print("\n使用履歴には書いていません（確かめている間は読むだけ）。")
+    return code
+
+
+def cmd_compare(args) -> int:
+    from . import compare, generated
+    from .sheet import Spreadsheet
+
+    settings = _settings(args)
+    tool = generated.load(args.generated)
+    gas_name = args.gas_sheet or generated.gas_name_for(args.generated)
+    try:
+        gas = Spreadsheet(settings).manuscript(gas_name)
+    except Exception:
+        print(f"GAS の原稿のシート「{gas_name}」が【AI用】にありません。GAS で③を回してから比べてください")
+        return 1
+    lines, diff = compare.compare(gas, tool)
+    print(f"GAS：{gas_name}\nツール：{args.generated}\n")
+    print("\n".join(lines))
+    print(f"\n違いのあった列：{diff}")
+    return 0 if diff == 0 else 2
 
 
 def cmd_check(args) -> int:
@@ -276,11 +366,26 @@ def main(argv=None) -> int:
     s.add_argument("--user", help="使うログインID（省略時は settings の login_user）")
     s.set_defaults(func=cmd_login)
 
+    s = sub.add_parser("plan", help="予約リスト（ヒトマネ実行設定）のグループを見る")
+    s.set_defaults(func=cmd_plan)
+
+    s = sub.add_parser("generate", help="予約リストのグループをツールで原稿にする（入稿・使用履歴の記録はしない）")
+    s.add_argument("--group", action="append", help="作るグループ番号（1-1, 1-2 … の「1」）。何度でも指定できる")
+    s.add_argument("--all", action="store_true", help="GAS がまだ実行していない全部のグループ")
+    s.add_argument("--include-done", action="store_true", help="GAS で実行済み（実行状況の入った）行も使う")
+    s.set_defaults(func=cmd_generate)
+
+    s = sub.add_parser("compare", help="GAS で作った原稿とツールで作った原稿を列ごとに見比べる")
+    s.add_argument("--generated", required=True, help="ツールで作った原稿（ツール_…）")
+    s.add_argument("--gas-sheet", help="GAS の原稿のシート名（省くと同じ予約の ヒトマネ出力_…）")
+    s.set_defaults(func=cmd_compare)
+
     for name, func, text in (("check", cmd_check, "入稿前のチェック"), ("upload", cmd_upload, "ヒトマネに取り込む")):
         s = sub.add_parser(name, help=text)
         g = s.add_mutually_exclusive_group(required=True)
         g.add_argument("--sheet", help="出力シートの名前（ヒトマネ出力_…）")
         g.add_argument("--csv", help="シートの代わりに読む CSV（取り出した CSV をそのまま取り込み直すときなど）")
+        g.add_argument("--generated", help="ツールで作った原稿（ツール_…。generate で作ったもの）")
         s.add_argument("--user", help="使うログインID（省略時は settings の login_user）")
         if name == "upload":
             s.add_argument("--company", help=COMPANY_HELP)

@@ -101,10 +101,17 @@ def branch_problem(ms: Manuscript, branches: list[dict], company: str = "") -> s
     if not branches:
         return "会社の拠点の一覧を読めませんでした。拠点を確かめられないため入稿しません"
     known = {b["code"] for b in branches}
+    have = "、".join(f"{b['code']} {b['name']}" for b in branches)
     missing = sorted({r.get("拠点コード", "").strip() for r in ms.rows} - known)
     if missing:
-        have = "、".join(f"{b['code']} {b['name']}" for b in branches)
         return (f"{company or 'この会社'}の拠点にない拠点コードがあります：{'、'.join(c or '（空欄）' for c in missing)}"
+                f"（この会社の拠点：{have}）。会社の選び間違いでないか確かめてください")
+    # 拠点コードが同じでも拠点名が違えば別の会社の原稿（会社情報ではエイトビィも B001。canal benefits の B001 は「CB株式会社」）
+    names = {b["code"]: b["name"] for b in branches}
+    wrong = sorted({(r.get("拠点コード", "").strip(), r.get("拠点", "").strip()) for r in ms.rows
+                    if "拠点" in r and r.get("拠点", "").strip() != names.get(r.get("拠点コード", "").strip())})
+    if wrong:
+        return (f"{company or 'この会社'}の拠点と拠点名が違います：{'、'.join(c + ' ' + (n or '（空欄）') for c, n in wrong)}"
                 f"（この会社の拠点：{have}）。会社の選び間違いでないか確かめてください")
     return None
 
