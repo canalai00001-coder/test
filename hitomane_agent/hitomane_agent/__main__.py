@@ -1,11 +1,15 @@
 """ヒトマネ入稿ツールのコマンド。
 
-  python -m hitomane_agent survey [--headed] [--sample [募集番号]]       管理画面の画面調査
-  python -m hitomane_agent login                                        ログインの確認と募集管理の全件数
+  python -m hitomane_agent companies                                    会社の一覧（ログイン情報シートの会社の行）
+  python -m hitomane_agent survey --company 会社 [--headed] [--sample [募集番号]]   管理画面の画面調査
+  python -m hitomane_agent login (--company 会社 | --all)               ログインの確認と募集管理の全件数・拠点
   python -m hitomane_agent list                                         出力シートの一覧とチェックの状態
   python -m hitomane_agent check (--sheet 名前 | --csv パス)            入稿前のチェック
-  python -m hitomane_agent upload (--sheet 名前 | --csv パス) [--yes] [--dry-run]   ヒトマネに取り込む
-  python -m hitomane_agent takedown --from 2026/10/01 --to 2026/10/31 [--prepare-only] [--yes]   取り下げ
+  python -m hitomane_agent upload --company 会社 (--sheet 名前 | --csv パス) [--yes] [--dry-run]   ヒトマネに取り込む
+  python -m hitomane_agent takedown --company 会社 --from 2026/10/01 --to 2026/10/31 [--prepare-only] [--yes]   取り下げ
+
+ヒトマネは会社ごとに管理画面の URL が違う（ID・パスワードは同じ）。--company は会社名・会社のコード（o3h3 など）・会社名の一部のどれでもよい。
+会社が1社しかないときと、settings.local.json に "company" を書いたときは省ける。
 """
 import argparse
 import sys
@@ -22,18 +26,31 @@ def _settings(args) -> dict:
     return settings
 
 
+def _info(args, settings) -> dict:
+    return accounts.login_info(settings, company=getattr(args, "company", None))
+
+
+def cmd_companies(args) -> int:
+    cs = accounts.companies(_settings(args))
+    if not cs:
+        print("ログイン情報シートに会社の行がありません（会社名とヒトマネの URL の入った行を足してください）")
+    for c in cs:
+        print(f"{c['company']}  {c['code']}  {c['url']}")
+    return 0
+
+
 def cmd_survey(args) -> int:
     from .survey import run_survey
 
     settings = _settings(args)
     try:
-        info = accounts.login_info(settings)
+        info = _info(args, settings)
     except Exception as e:
         print(f"ログイン情報を読めませんでした: {e}")
         return 1
-    out = config.OUTPUT_DIR / f"画面調査_{datetime.now():%Y%m%d_%H%M}"
+    out = config.OUTPUT_DIR / f"画面調査_{info.get('code') or 'x'}_{datetime.now():%Y%m%d_%H%M}"
     h = settings["hitomane"]
-    print(f"ヒトマネ管理画面を {info['login_id']} で調べます（{info['url']}）。取り込み・取り下げはしません")
+    print(f"{accounts.label(info)} の管理画面を {info['login_id']} で調べます（{info['url']}）。取り込み・取り下げはしません")
     res = run_survey(info, out, headed=args.headed, sample=args.sample or "",
                      poll_interval_ms=h["poll_interval_ms"], export_poll_times=h["export_poll_times"],
                      timeout_ms=h["timeout_ms"])
@@ -51,8 +68,10 @@ def cmd_list(args) -> int:
     if not names:
         print("出力シート（ヒトマネ出力_…）がありません。GAS の③で原稿を作ってください")
     for n in names:
-        rv, up = reviews.get(n, {}), uploaded.get(n)
-        print(f"{n}  チェック:{rv.get('status', '未実施')}  入稿:{up['uploaded_at'] if up else '未'}")
+        rv = reviews.get(n, {})
+        ups = [f"{v.get('company') or k.split('|')[0]} {v['uploaded_at']}" for k, v in uploaded.items()
+               if k == n or k.endswith("|" + n)]
+        print(f"{n}  チェック:{rv.get('status', '未実施')}  入稿:{'、'.join(ups) or '未'}")
     return 0
 
 
@@ -82,29 +101,34 @@ def cmd_upload(args) -> int:
 
     settings, rules = _settings(args), config.load("rules.json")
     ms = _manuscript(args, settings)
-    stop = workflow.upload_problem(ms)
+    info = _info(args, settings)
+    key = accounts.account_key(info)
+    stop = workflow.upload_problem(ms, key)
     if stop:
         print(f"入稿しません: {stop}")
         return 1
     rv = workflow.load_state("reviews.json")[ms.name]
     paths = workflow.write_csvs(ms, settings, rules)
-    print(f"シート: {ms.name}\n原稿数: {len(ms.rows)}\nチェック結果: {rv['status']}（{rv['checked_at']}）")
+    print(f"入れる会社: {accounts.label(info)}\nシート: {ms.name}\n原稿数: {len(ms.rows)}\nチェック結果: {rv['status']}（{rv['checked_at']}）")
     print("CSV: " + "、".join(str(p) for p in paths))
     if rv["status"] == "要確認":
         print("※ 注意の指摘があります。レポートを確かめてから入稿してください")
     if args.dry_run:
         print("--dry-run のため、ここで止めます（取り込みはしていません）")
         return 0
-    info = accounts.login_info(settings)
     up = HitomaneUploader(info, settings["hitomane"], config.OUTPUT_DIR / ms.name, headed=args.headed)
-    total = up.total()
-    workflow.save_total(info["login_id"], total)
-    print(workflow.total_note(total, len(ms.rows), rules))
-    if not args.yes and input(f"ヒトマネ（{info['login_id']}）に取り込みますか？ [y/N] > ").strip().lower() != "y":
+    acct = up.account()
+    workflow.save_total(key, acct["total"], info.get("company", ""))
+    stop = workflow.branch_problem(ms, acct["branches"], info.get("company", ""))
+    if stop:
+        print(f"入稿しません: {stop}")
+        return 1
+    print(workflow.total_note(acct["total"], len(ms.rows), rules))
+    if not args.yes and input(f"{accounts.label(info)} に取り込みますか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
     results = up.upload(paths)
-    workflow.record_upload(ms, results)
+    workflow.record_upload(ms, results, key, info.get("company", ""))
     ok = bool(results) and all(r.ok for r in results) and len(results) == len(paths)
     for r in results:
         print(f"{'成功' if r.ok else '失敗'}: {r.file} {r.message}\n  {r.row_text}\n  画面: {r.screenshot}")
@@ -114,29 +138,37 @@ def cmd_upload(args) -> int:
 
 
 def cmd_login(args) -> int:
-    """ログインできるかを確かめ、募集管理の全件数を読んで覚える（ヒトマネは変えない）。"""
+    """ログインできるかを確かめ、募集管理の全件数と拠点を読む（全件数は覚えておく。ヒトマネは変えない）。"""
     from .uploader import HitomaneUploader
 
     settings, rules = _settings(args), config.load("rules.json")
     try:
-        info = accounts.login_info(settings)
+        names = [c["code"] for c in accounts.companies(settings)] if args.all else [args.company]
+        infos = [accounts.login_info(settings, company=n) for n in names]
     except Exception as e:
         print(f"ログイン情報を読めませんでした: {e}")
         return 1
-    print(f"ヒトマネに {info['login_id']} でログインします（{info['url']}）")
-    try:
-        total = HitomaneUploader(info, settings["hitomane"], config.OUTPUT_DIR / "ログイン確認",
-                                 headed=args.headed).total()
-    except Exception as e:
-        print(f"ログインできませんでした: {e}")
-        return 2
-    workflow.save_total(info["login_id"], total)
-    print("ログインできました")
-    if total is None:
-        print("募集管理の全件数は読めませんでした")
-    else:
-        print(f"募集管理の全件数: {total:,}件（上限 {rules['total_limit']:,}件、あと {rules['total_limit'] - total:,}件）")
-    return 0
+    failed = 0
+    for info in infos:
+        print(f"\n{accounts.label(info)} に {info['login_id']} でログインします（{info['url']}）")
+        try:
+            acct = HitomaneUploader(info, settings["hitomane"], config.OUTPUT_DIR / "ログイン確認",
+                                    headed=args.headed).account()
+        except Exception as e:
+            print(f"ログインできませんでした: {e}")
+            failed += 1
+            continue
+        total = acct["total"]
+        workflow.save_total(accounts.account_key(info), total, info.get("company", ""))
+        print("ログインできました")
+        if total is None:
+            print("募集管理の全件数は読めませんでした")
+        else:
+            print(f"募集管理の全件数: {total:,}件（上限 {rules['total_limit']:,}件、あと {rules['total_limit'] - total:,}件）")
+        print("拠点: " + ("、".join(f"{b['name']}（{b['code']}）" for b in acct["branches"]) or "読めませんでした"))
+    if len(infos) > 1:
+        print(f"\n{len(infos)}社中 {len(infos) - failed}社にログインできました")
+    return 2 if failed else 0
 
 
 def cmd_takedown(args) -> int:
@@ -157,14 +189,15 @@ def cmd_takedown(args) -> int:
     if cond.start_from > cond.start_to:
         print("期間の「から」が「まで」より後です")
         return 1
-    info = accounts.login_info(settings)
+    info = _info(args, settings)
+    key = accounts.account_key(info)
     today = date.today()
-    prepared = None if args.prepare_only else takedown.find_prepared(info["login_id"], cond, today)
-    print(f"アカウント: {info['login_id']}\n条件: {cond.describe()}")
+    prepared = None if args.prepare_only else takedown.find_prepared(key, cond, today)
+    print(f"会社: {accounts.label(info)}\nログインID: {info['login_id']}\n条件: {cond.describe()}")
     if prepared:
         print(f"今日の「確認だけ」（{prepared['prepared_at']}）のファイルを使います（取り出しは省きます）")
     else:
-        out = config.OUTPUT_DIR / f"取り下げ_{today:%Y%m%d}_{cond.label()}"
+        out = config.OUTPUT_DIR / f"取り下げ_{key}_{today:%Y%m%d}_{cond.label()}"
         res = HitomaneExporter(info, settings["hitomane"], out, headed=args.headed).export(cond, out / "取り出し.csv")
         if not res["file"]:
             print("条件に合う原稿はありません。取り下げるものはありません")
@@ -178,7 +211,7 @@ def cmd_takedown(args) -> int:
             files.append(str(f))
         prepared = {"searched": res["count"], "rows": len(rw.manuscript.rows), "skipped": rw.skipped,
                     "new_date": rw.new_date, "branch": res["branch"], "files": files if rw.manuscript.rows else []}
-        takedown.save_prepared(info["login_id"], cond, prepared, today)
+        takedown.save_prepared(key, cond, {**prepared, "company": info.get("company", "")}, today)
     b = prepared["branch"]
     print(f"拠点: {b['name']}（{b['code']}）\n検索の件数: {prepared['searched']}件\n取り下げる原稿: {prepared['rows']}件")
     for reason, n in prepared["skipped"].items():
@@ -191,14 +224,15 @@ def cmd_takedown(args) -> int:
     if not prepared["rows"]:
         print("取り下げる原稿がありません")
         return 0
-    if not args.yes and input(f"{prepared['rows']}件を取り下げますか？ [y/N] > ").strip().lower() != "y":
+    if not args.yes and input(f"{accounts.label(info)} の {prepared['rows']}件を取り下げますか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
     out_dir = Path(prepared["files"][0]).parent
     results = HitomaneUploader(info, settings["hitomane"], out_dir, headed=args.headed).upload(
         [Path(f) for f in prepared["files"]])
     ok = len(results) == len(prepared["files"]) and all(r.ok for r in results)
-    takedown.record({"login_id": info["login_id"], "conditions": cond.describe(), "rows": prepared["rows"], "ok": ok,
+    takedown.record({"account": key, "company": info.get("company", ""), "login_id": info["login_id"],
+                     "conditions": cond.describe(), "rows": prepared["rows"], "ok": ok,
                      "results": [{"file": r.file, "ok": r.ok, "message": r.message, "row": r.row_text} for r in results]})
     for r in results:
         print(f"{'成功' if r.ok else '失敗'}: {r.file} {r.message}\n  {r.row_text}")
@@ -206,6 +240,9 @@ def cmd_takedown(args) -> int:
         print(f"失敗したため、残りの {len(prepared['files']) - len(results)} ファイルは取り込んでいません")
     print("取り下げました" if ok else "取り下げは途中で止まりました。取込ファイル一覧を確かめてください")
     return 0 if ok else 2
+
+
+COMPANY_HELP = "入れる会社（会社名・会社のコード・会社名の一部）。1社だけのときと settings の company があるときは省ける"
 
 
 def main(argv=None) -> int:
@@ -216,13 +253,20 @@ def main(argv=None) -> int:
     s.add_argument("--sample", nargs="?", const="auto",
                    help="この募集番号の原稿を1件だけ取り出して、CSV の見本を保存する（番号を省くと、一覧のいちばん上の原稿を使う）")
     s.add_argument("--user", help="使うログインID（またはログイン情報シートのメモの名前）。省略時は settings の login_user")
+    s.add_argument("--company", help=COMPANY_HELP)
     s.set_defaults(func=cmd_survey)
+
+    s = sub.add_parser("companies", help="会社の一覧（ログイン情報シートの会社の行）")
+    s.set_defaults(func=cmd_companies)
 
     s = sub.add_parser("list", help="出力シートの一覧とチェック・入稿の状態")
     s.set_defaults(func=cmd_list)
 
-    s = sub.add_parser("login", help="ログインできるかを確かめ、募集管理の全件数を読む（ヒトマネは変えない）")
+    s = sub.add_parser("login", help="ログインできるかを確かめ、募集管理の全件数と拠点を読む（ヒトマネは変えない）")
     s.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--company", help=COMPANY_HELP)
+    g.add_argument("--all", action="store_true", help="ログイン情報シートの全社を順に確かめる")
     s.add_argument("--user", help="使うログインID（省略時は settings の login_user）")
     s.set_defaults(func=cmd_login)
 
@@ -233,6 +277,7 @@ def main(argv=None) -> int:
         g.add_argument("--csv", help="シートの代わりに読む CSV（取り出した CSV をそのまま取り込み直すときなど）")
         s.add_argument("--user", help="使うログインID（省略時は settings の login_user）")
         if name == "upload":
+            s.add_argument("--company", help=COMPANY_HELP)
             s.add_argument("--yes", action="store_true", help="確認を聞かずに取り込む")
             s.add_argument("--dry-run", action="store_true", help="CSV を作るところまで（取り込まない）")
             s.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
@@ -245,6 +290,7 @@ def main(argv=None) -> int:
     s.add_argument("--yes", action="store_true", help="確認を聞かずに取り下げる")
     s.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
     s.add_argument("--user", help="使うログインID（省略時は settings の login_user）")
+    s.add_argument("--company", help=COMPANY_HELP)
     s.set_defaults(func=cmd_takedown)
     args = ap.parse_args(argv)
     return args.func(args)

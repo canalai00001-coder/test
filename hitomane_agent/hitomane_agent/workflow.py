@@ -49,8 +49,12 @@ def check(ms: Manuscript, rules: dict) -> dict:
             "issues": [[i.to_dict() for i in r] for r in results]}
 
 
-def upload_problem(ms: Manuscript) -> str | None:
-    """入稿してはいけない理由（なければ None）。"""
+def _upload_key(account: str, name: str) -> str:
+    return f"{account}|{name}" if account else name
+
+
+def upload_problem(ms: Manuscript, account: str = "") -> str | None:
+    """入稿してはいけない理由（なければ None）。入稿済みかどうかは会社（account）ごとに見る。"""
     rv = load_state("reviews.json").get(ms.name)
     if not rv:
         return "チェックをしていません。先にチェックしてください"
@@ -58,7 +62,7 @@ def upload_problem(ms: Manuscript) -> str | None:
         return "チェックのあとにシートの内容が変わっています。チェックをやり直してください"
     if rv["status"] == "NG":
         return "チェック結果が NG です。シートを直してチェックをやり直してください"
-    done = load_state("uploaded.json").get(ms.name)
+    done = load_state("uploaded.json").get(_upload_key(account, ms.name))
     if done and done.get("hash") == rv["hash"]:
         return f"同じ内容を {done['uploaded_at']} に入稿済みです"
     return None
@@ -88,22 +92,42 @@ def total_note(total: int | None, rows: int, rules: dict) -> str:
     return note
 
 
-def record_upload(ms: Manuscript, results: list) -> None:
+def uploaded_entry(account: str, name: str) -> dict | None:
+    return load_state("uploaded.json").get(_upload_key(account, name))
+
+
+def branch_problem(ms: Manuscript, branches: list[dict], company: str = "") -> str | None:
+    """シートの拠点コードが、入れる会社の拠点の一覧にないとき（会社の選び間違い）の理由。"""
+    if not branches:
+        return "会社の拠点の一覧を読めませんでした。拠点を確かめられないため入稿しません"
+    known = {b["code"] for b in branches}
+    missing = sorted({r.get("拠点コード", "").strip() for r in ms.rows} - known)
+    if missing:
+        have = "、".join(f"{b['code']} {b['name']}" for b in branches)
+        return (f"{company or 'この会社'}の拠点にない拠点コードがあります：{'、'.join(c or '（空欄）' for c in missing)}"
+                f"（この会社の拠点：{have}）。会社の選び間違いでないか確かめてください")
+    return None
+
+
+def record_upload(ms: Manuscript, results: list, account: str = "", company: str = "") -> None:
     if results and all(r.ok for r in results):
         uploaded = load_state("uploaded.json")
-        uploaded[ms.name] = {"hash": ms.data_hash(), "rows": len(ms.rows),
+        uploaded[_upload_key(account, ms.name)] = {"company": company, "hash": ms.data_hash(), "rows": len(ms.rows),
                              "uploaded_at": datetime.now().isoformat(timespec="seconds"),
                              "files": [r.file for r in results]}
         save_state("uploaded.json", uploaded)
 
 
-def save_total(login_id: str, total: int | None) -> None:
-    """最後に読んだ募集管理の全件数を覚えておく（操作画面の入稿タブに出す）。読めなかったときは書かない。"""
+def save_total(account: str, total: int | None, company: str = "") -> None:
+    """最後に読んだ募集管理の全件数を会社ごとに覚えておく（操作画面に出す）。読めなかったときは書かない。"""
     if total is None:
         return
-    save_state("total.json", {"login_id": login_id, "total": total,
-                              "at": datetime.now().isoformat(timespec="seconds")})
+    all_ = load_state("total.json")
+    if "total" in all_:  # 会社ごとに分ける前の形は捨てる
+        all_ = {}
+    all_[account] = {"company": company, "total": total, "at": datetime.now().isoformat(timespec="seconds")}
+    save_state("total.json", all_)
 
 
-def last_total() -> dict:
-    return load_state("total.json")
+def last_total(account: str) -> dict:
+    return load_state("total.json").get(account, {})

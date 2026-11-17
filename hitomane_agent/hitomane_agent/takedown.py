@@ -81,37 +81,38 @@ def rewrite(ms: Manuscript, cond: Conditions, branch: dict, today: date) -> Rewr
 
 # ---- 確認だけ のファイル ----
 
-def _key(login_id: str, cond: Conditions, today: date) -> str:
-    return f"{today:%Y-%m-%d}|{login_id}|{cond.label()}|{int(cond.posted_only)}"
+def _key(account: str, cond: Conditions, today: date) -> str:
+    """account は会社のコード（accounts.account_key）。会社が違えば別の確認になる。"""
+    return f"{today:%Y-%m-%d}|{account}|{cond.label()}|{int(cond.posted_only)}"
 
 
-def save_prepared(login_id: str, cond: Conditions, data: dict, today: date) -> None:
+def save_prepared(account: str, cond: Conditions, data: dict, today: date) -> None:
     path = config.STATE_DIR / "takedown_prepared.json"
     all_ = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     all_ = {k: v for k, v in all_.items() if k.startswith(f"{today:%Y-%m-%d}|")}  # 前の日のものは消す
-    all_[_key(login_id, cond, today)] = {**data, "conditions": cond.describe(), "login_id": login_id,
+    all_[_key(account, cond, today)] = {**data, "conditions": cond.describe(), "account": account,
                                          "prepared_at": datetime.now().isoformat(timespec="seconds")}
     config.STATE_DIR.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(all_, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def find_prepared(login_id: str, cond: Conditions, today: date) -> dict | None:
+def find_prepared(account: str, cond: Conditions, today: date) -> dict | None:
     path = config.STATE_DIR / "takedown_prepared.json"
     if not path.exists():
         return None
-    p = json.loads(path.read_text(encoding="utf-8")).get(_key(login_id, cond, today))
+    p = json.loads(path.read_text(encoding="utf-8")).get(_key(account, cond, today))
     if not p or not all(Path(f).exists() for f in p.get("files", [])):
         return None
     return p
 
 
-def prepared_list(today: date) -> list[dict]:
+def prepared_list(today: date, account: str | None = None) -> list[dict]:
     path = config.STATE_DIR / "takedown_prepared.json"
     if not path.exists():
         return []
     out = []
     for k, v in json.loads(path.read_text(encoding="utf-8")).items():
-        if not k.startswith(f"{today:%Y-%m-%d}|"):
+        if not k.startswith(f"{today:%Y-%m-%d}|") or (account is not None and k.split("|")[1] != account):
             continue
         a, b = k.split("|")[2].split("-")  # 操作画面の「この期間を入れる」用
         out.append({**v, "from": f"{a[:4]}/{a[4:6]}/{a[6:]}", "to": f"{b[:4]}/{b[4:6]}/{b[6:]}"})

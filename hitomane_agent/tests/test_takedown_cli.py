@@ -34,7 +34,8 @@ class TestTakedownCli(unittest.TestCase):
             mock.patch.object(config, "STATE_DIR", d / "state"),
             mock.patch.object(config, "load", side_effect=lambda n: settings if n == "settings.json" else real_load(n)),
             mock.patch("hitomane_agent.accounts.login_info",
-                       lambda s: {"login_id": "Minami", "password": "pw", "url": url}),
+                       lambda s, book=None, company=None: {"login_id": "Minami", "password": "pw", "url": url,
+                                                           "company": "canal benefits株式会社", "code": "m66w"}),
         ]
         for p in patches:
             p.start()
@@ -99,12 +100,13 @@ class TestTakedownCli(unittest.TestCase):
         self.st.total = 49990
         buf = io.StringIO()
         with redirect_stdout(buf):
-            code = cli.main(["login"])
+            code = cli.main(["login", "--company", "m66w"])
         self.assertEqual(code, 0, buf.getvalue())
         self.assertIn("ログインできました", buf.getvalue())
         self.assertIn("49,990件", buf.getvalue())
         self.assertIn("あと 10件", buf.getvalue())
-        self.assertEqual(workflow.last_total()["total"], 49990)
+        self.assertEqual(workflow.last_total("m66w")["total"], 49990)
+        self.assertIn("拠点: CB株式会社（B001）", buf.getvalue())
         self.assertEqual((self.st.export_reserved, self.st.imports), (0, []))
 
 

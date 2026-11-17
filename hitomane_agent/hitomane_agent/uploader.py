@@ -61,6 +61,15 @@ class HitomaneUploader:
             finally:
                 browser.close()
 
+    def account(self) -> dict:
+        """入稿の前に見るもの：{"total": 募集管理の全件数, "branches": 会社の拠点の一覧}（1回のログインで読む）。"""
+        with sync_playwright() as p:
+            browser, page = self._open(p)
+            try:
+                return {"total": self._total(page), "branches": site.branches(page, self.info)}
+            finally:
+                browser.close()
+
     def _total(self, page: Page) -> int | None:
         page.goto(site.url(self.info, "rec_recruitments"))
         page.wait_for_load_state("networkidle")

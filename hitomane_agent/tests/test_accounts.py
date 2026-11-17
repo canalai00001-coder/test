@@ -28,7 +28,8 @@ class TestLoginInfo(unittest.TestCase):
         book = FakeBook([["canal benefits株式会社", "c", "x", "", ""], ["ヒトマネ", "Minami", "pw", "", ""]],
                         [{"type": "user"}])
         self.assertEqual(accounts.login_info(SETTINGS, book),
-                         {"login_id": "Minami", "password": "pw", "url": "https://kanri.hitomgr.jp/m66w/"})
+                         {"login_id": "Minami", "password": "pw", "url": "https://kanri.hitomgr.jp/m66w/",
+                          "company": "", "code": "m66w"})
         self.assertEqual(book.opened, ["ヒトマネログイン情報"])
 
     def test_url_column_is_used_when_filled(self):
@@ -102,6 +103,50 @@ class TestStaffLogins(unittest.TestCase):
     def test_unknown_user(self):
         with self.assertRaisesRegex(RuntimeError, "nobody"):
             accounts.login_info(dict(SETTINGS, login_user="nobody"), MultiBook({"ヒトマネログイン情報": REAL}))
+
+
+# 2026-11-17 の実物：会社の行の URL は見出しのない6列目にある。ID・パスワードは会社が違っても同じ
+COMPANY_ROWS = [HEAD + [""], ["", "Minami0373", "p1", "", "守谷さん", ""], ["", "Mika0910", "p2", "", "三成さん", ""],
+                ["GritMate株式会社", "Minami0373", "p1", "", "", "https://kanri.hitomgr.jp/o3h3/login"],
+                ["canal benefits株式会社", "Minami0373", "p1", "", "", "https://kanri.hitomgr.jp/m66w/login"]]
+
+
+class TestCompanies(unittest.TestCase):
+    def setUp(self):
+        self.book = MultiBook({"ヒトマネログイン情報": COMPANY_ROWS})
+
+    def test_list(self):
+        self.assertEqual(accounts.companies(SETTINGS, self.book), [
+            {"company": "GritMate株式会社", "code": "o3h3", "url": "https://kanri.hitomgr.jp/o3h3/"},
+            {"company": "canal benefits株式会社", "code": "m66w", "url": "https://kanri.hitomgr.jp/m66w/"}])
+
+    def test_company_url_with_staff_password(self):
+        s = dict(SETTINGS, login_user="三成")
+        for name in ("GritMate株式会社", "o3h3", "gritmate"):
+            info = accounts.login_info(s, self.book, company=name)
+            self.assertEqual((info["login_id"], info["password"], info["url"], info["code"]),
+                             ("Mika0910", "p2", "https://kanri.hitomgr.jp/o3h3/", "o3h3"))
+
+    def test_staff_row_is_preferred_over_company_row(self):
+        info = accounts.login_info(dict(SETTINGS, login_user="Minami0373"), self.book, company="m66w")
+        self.assertEqual((info["password"], info["company"]), ("p1", "canal benefits株式会社"))
+
+    def test_company_must_be_chosen(self):
+        with self.assertRaisesRegex(RuntimeError, "会社を選んで|どの会社"):
+            accounts.login_info(SETTINGS, self.book)
+        info = accounts.login_info(dict(SETTINGS, company="GritMate"), self.book)  # settings の company でもよい
+        self.assertEqual(info["code"], "o3h3")
+
+    def test_unknown_company(self):
+        with self.assertRaisesRegex(RuntimeError, "見つかりません.*GritMate株式会社（o3h3）"):
+            accounts.login_info(SETTINGS, self.book, company="nobody")
+        with self.assertRaisesRegex(RuntimeError, "1社に決まりません"):
+            accounts.login_info(SETTINGS, self.book, company="株式会社")
+
+    def test_base_url(self):
+        self.assertEqual(accounts.base_url("https://kanri.hitomgr.jp/o3h3/login"),
+                         ("o3h3", "https://kanri.hitomgr.jp/o3h3/"))
+        self.assertIsNone(accounts.base_url("https://m.q-mate.jp/job_offers/bulk_new?co=1"))
 
 
 if __name__ == "__main__":

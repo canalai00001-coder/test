@@ -44,6 +44,19 @@ def url(info: dict, path: str) -> str:
     return info["url"].rstrip("/") + "/" + path.lstrip("/")
 
 
+def branches(page: Page, info: dict) -> list[dict]:
+    """会社の拠点の一覧（m_branches）→ [{"code", "name"}]。列：エリア・拠点コード・…・拠点名。"""
+    page.goto(url(info, "m_branches"))
+    page.wait_for_load_state("networkidle")
+    out = []
+    rows = page.locator("tbody.records tr.record")
+    for i in range(rows.count()):
+        cells = [c.strip() for c in rows.nth(i).locator("td").all_inner_texts()]
+        if len(cells) >= 4:
+            out.append({"code": cells[1], "name": cells[3]})
+    return out
+
+
 def top_row(page: Page):
     """一覧のいちばん上の行。行は tbody.records の tr.record（tbody.messages の「見つかりませんでした」は見ない）。"""
     rows = page.locator("tbody.records tr.record")

@@ -44,13 +44,10 @@ class HitomaneExporter:
 
     def _branch(self, page: Page) -> dict:
         """アカウントの拠点（拠点の一覧の行が1つだけのとき）。列：エリア・拠点コード・…・拠点名。"""
-        page.goto(site.url(self.info, "m_branches"))
-        page.wait_for_load_state("networkidle")
-        rows = page.locator("tbody.records tr.record")
-        if rows.count() != 1:
-            raise RuntimeError(f"このアカウントの拠点が {rows.count()}つあります。どの拠点の原稿かを決められないため止めます")
-        cells = [c.strip() for c in rows.first.locator("td").all_inner_texts()]
-        return {"code": cells[1], "name": cells[3]}
+        rows = site.branches(page, self.info)
+        if len(rows) != 1:
+            raise RuntimeError(f"この会社の拠点が {len(rows)}つあります。どの拠点の原稿かを決められないため止めます")
+        return rows[0]
 
     def export(self, cond: Conditions, out_path: Path) -> dict:
         """{"count": 検索の件数, "branch": 拠点, "file": 落とした CSV（0件なら None）}"""

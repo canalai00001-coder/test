@@ -18,16 +18,26 @@ class FakeUploader:
     calls = []
     ok = True
     total_value = 100
+    branches = [{"code": "B001", "name": "テスト株式会社"}]
+    infos = []
 
     def __init__(self, info, opts, out_dir, headed=False, log=print):
-        pass
+        FakeUploader.infos.append(info)
 
     def total(self):
         return FakeUploader.total_value
 
+    def account(self):
+        return {"total": FakeUploader.total_value, "branches": FakeUploader.branches}
+
     def upload(self, files):
         FakeUploader.calls.append([Path(f).read_bytes() for f in files])
         return [UploadResult(Path(f).name, FakeUploader.ok, "取り込みが終わりました（完了）") for f in files]
+
+
+def fake_login_info(settings, book=None, company=None):
+    code = company or "m66w"
+    return {"login_id": "Minami", "password": "pw", "url": f"http://x/{code}/", "company": f"{code}社", "code": code}
 
 
 class Base(unittest.TestCase):
@@ -38,12 +48,12 @@ class Base(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         for target, value in (("hitomane_agent.uploader.HitomaneUploader", FakeUploader),
-                              ("hitomane_agent.accounts.login_info",
-                               lambda s: {"login_id": "Minami", "password": "pw", "url": "http://x/m66w/"})):
+                              ("hitomane_agent.accounts.login_info", fake_login_info)):
             p = mock.patch(target, value)
             p.start()
             self.addCleanup(p.stop)
         FakeUploader.calls, FakeUploader.ok, FakeUploader.total_value = [], True, 100
+        FakeUploader.branches, FakeUploader.infos = [{"code": "B001", "name": "テスト株式会社"}], []
         self.dir = d
         self.csv = d / "ヒトマネ出力_テスト.csv"
         self.write(row())
@@ -137,6 +147,40 @@ class TestWorkflow(Base):
             code, out = self.run_cli("upload", "--csv", str(self.csv), "--yes", "--dry-run")
         self.assertIn("ヒトマネ出力_テスト_1.csv", out)
         self.assertIn("ヒトマネ出力_テスト_2.csv", out)
+
+
+class TestCompany(Base):
+    def setUp(self):
+        super().setUp()
+        self.run_cli("check", "--csv", str(self.csv))
+
+    def test_company_is_shown_and_used(self):
+        code, out = self.run_cli("upload", "--csv", str(self.csv), "--yes", "--company", "o3h3")
+        self.assertEqual(code, 0, out)
+        self.assertIn("入れる会社: o3h3社（o3h3）", out)
+        self.assertEqual(FakeUploader.infos[-1]["url"], "http://x/o3h3/")
+
+    def test_branch_of_other_company_stops(self):
+        FakeUploader.branches = [{"code": "G001", "name": "GritMate株式会社"}]
+        code, out = self.run_cli("upload", "--csv", str(self.csv), "--yes", "--company", "o3h3")
+        self.assertEqual(code, 1)
+        self.assertIn("拠点にない拠点コードがあります：B001", out)
+        self.assertIn("G001 GritMate株式会社", out)
+        self.assertEqual(FakeUploader.calls, [])
+
+    def test_no_branches_stops(self):
+        FakeUploader.branches = []
+        code, out = self.run_cli("upload", "--csv", str(self.csv), "--yes")
+        self.assertEqual(code, 1)
+        self.assertIn("拠点の一覧を読めませんでした", out)
+
+    def test_uploaded_is_per_company(self):
+        self.assertEqual(self.run_cli("upload", "--csv", str(self.csv), "--yes", "--company", "m66w")[0], 0)
+        code, out = self.run_cli("upload", "--csv", str(self.csv), "--yes", "--company", "m66w")
+        self.assertIn("入稿済み", out)
+        code, out = self.run_cli("upload", "--csv", str(self.csv), "--yes", "--company", "o3h3")
+        self.assertEqual(code, 0, out)  # 別の会社には入れられる
+        self.assertEqual(len(FakeUploader.calls), 2)
 
 
 _load = config.load
