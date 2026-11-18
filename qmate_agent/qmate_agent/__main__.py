@@ -291,7 +291,7 @@ def cmd_schedule(args) -> int:
             return 1
         t = gas_targets[commutes[p.row]]
         defaults = t.get("defaults", {})
-        print(f"  {p.row}行目: {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / "
+        print(f"  {p.row}行目: {p.company} / {p.category} / {p.night_label} / "
               f"{commutes[p.row]}（{'ツール' if t.get('engine') == 'python' else commutes[p.row] + '用の GAS'}で生成） / {p.employment or defaults.get('雇用形態')} / "
               f"{args.count or p.count}件 / ステータス {args.status or p.status or defaults.get('ステータス')}")
         problem = "" if args.dry_run else accounts.login_problem(settings, p.company)
@@ -551,7 +551,7 @@ def _preview_one(settings: dict, rules: dict, p) -> int:
         print(f"{c}は GAS で原稿を作る設定のため、テストはできません（入稿タブで「ツールで作る」に切り替えてください）")
         return 1
     print(f"入稿予定表 {p.row}行目をテストします（入稿・使用履歴の記録・実行結果の書き込みはしません）")
-    print(f"  {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / {c} / {p.count}件 / "
+    print(f"  {p.company} / {p.category} / {p.night_label} / {c} / {p.count}件 / "
           f"ステータス {p.status or t.get('defaults', {}).get('ステータス')}")
     today, run_id = date.today(), datetime.now().strftime("%H%M")
     opts = SimpleNamespace(status=None, count=None, dry_run=True)
@@ -568,7 +568,7 @@ def _preview_one(settings: dict, rules: dict, p) -> int:
         problem = f"会社情報を読めず、応募先メールを確かめられません: {e}"
         print(problem)
     meta = {"row": p.row, "plan_key": p.key, "company": p.company, "category": p.category, "commute": c,
-            "night": "夜勤あり" if p.night else "夜勤なし", "count": len(ms.rows), "company_info": info,
+            "night": p.night_label, "count": len(ms.rows), "company_info": info,
             "title_counts": getattr(ms, "title_counts", {}), "usage_category": getattr(ms, "category", p.category),
             "salary_rule": getattr(ms, "salary_rule", None)}
     name = preview.save(meta, ms)

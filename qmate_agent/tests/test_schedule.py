@@ -46,6 +46,25 @@ class TestPlan(unittest.TestCase):
         rows = sc.read_plan([HEAD, [46328, "AspiRove株式会社", "1クルマ", True, "通勤", "正社員", "下書き", 50]], TODAY)
         self.assertEqual((rows[0].run_date, rows[0].night, rows[0].count), (date(2026, 11, 2), True, 50))
 
+    def test_night_shift_three_choices(self):
+        # プルダウンの3つ（元の実行設定と同じ）と、前のチェックボックスの値
+        for v, want in (("夜勤あり", "夜勤あり"), ("夜勤あり(2時3時)", "夜勤あり(2時3時)"), ("夜勤あり（2時３時）", "夜勤あり(2時3時)"),
+                        ("夜勤なし", "夜勤なし"), ("TRUE", "夜勤あり"), (True, "夜勤あり"), ("FALSE", "夜勤なし"),
+                        (False, "夜勤なし"), ("", "")):
+            self.assertEqual(sc.night_shift_of(v), want, v)
+        plan = sc.PlanRow(2, None, "A社", "1クルマ", "夜勤あり(2時3時)", 5)
+        self.assertTrue(plan.night)  # 給与は夜勤ありと同じ
+        self.assertEqual(as_dict(plan, "通勤")["夜勤の有無"], "夜勤あり(2時3時)")  # 勤務時間は2時3時の列から
+        self.assertEqual(as_dict(sc.PlanRow(2, None, "A社", "1クルマ", "夜勤なし", 5), "入寮")["夜勤の有無"], "夜勤なし")
+        # 前に実行した行（チェックボックスの頃）と同じ印になる
+        old = sc.read_plan([HEAD, ["", "A社", "1クルマ", "TRUE", "通勤", "", "", "5"]], TODAY)[0]
+        self.assertIn("|夜勤あり|", old.key)
+
+    def test_night_shift_blank_or_unknown_stops(self):
+        for v in ("", "わからない"):
+            with self.assertRaisesRegex(ValueError, "夜勤有無"):
+                as_dict(sc.PlanRow(2, None, "A社", "1クルマ", v, 5), "通勤")
+
     def test_old_layout_without_new_columns(self):
         rows = sc.read_plan([["実行日", "会社", "職種", "夜勤有無", "原稿数"], ["", "A社", "1クルマ", "TRUE", "5"]], TODAY)
         self.assertEqual((rows[0].count, rows[0].commute, rows[0].title_choice), (5, "", ""))
@@ -89,11 +108,11 @@ class TestPlan(unittest.TestCase):
         plan = sc.read_plan(PLAN, TODAY)[2]
         self.assertEqual(sc.commute_of(plan, "通勤"), "通勤")
         with self.assertRaises(ValueError):
-            sc.commute_of(sc.PlanRow(2, None, "A社", "1クルマ", False, 5, commute="寮"), "通勤")
+            sc.commute_of(sc.PlanRow(2, None, "A社", "1クルマ", "夜勤なし", 5, commute="寮"), "通勤")
 
     def test_heavy_light_need_title_choice(self):
         with self.assertRaises(ValueError):
-            sc.config_row(sc.PlanRow(2, None, "A社", "6重め", True, 5), "通勤", TARGETS["通勤"], RULES, TODAY, "0900")
+            sc.config_row(sc.PlanRow(2, None, "A社", "6重め", "夜勤あり", 5), "通勤", TARGETS["通勤"], RULES, TODAY, "0900")
 
     def test_row_ranges(self):
         self.assertEqual(sc.row_ranges([4, 5, 6, 9]), "4〜6、9")

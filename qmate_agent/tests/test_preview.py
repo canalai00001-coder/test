@@ -59,7 +59,7 @@ class TestPreviewFiles(Base):
 
 class TestCommands(Base):
     def plan(self, key="KEY"):
-        return SimpleNamespace(row=3, key=key, company=COMPANY["name"], category="6重め", night=True, count=2,
+        return SimpleNamespace(row=3, key=key, company=COMPANY["name"], category="6重め", night=True, night_label="夜勤あり", count=2,
                                commute="通勤", status="下書き")
 
     def test_preview_command_does_not_upload_or_record(self):

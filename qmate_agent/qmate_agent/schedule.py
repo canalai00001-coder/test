@@ -5,6 +5,7 @@
 """
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -19,6 +20,29 @@ CONFIG_FIELDS = {
              "求人ボックスワード", "職種名選択"],
 }
 COMMUTE_TYPES = tuple(CONFIG_FIELDS)
+# 夜勤有無の選び方（元の実行設定の「夜勤の有無」と同じ3つ）。
+# 「夜勤あり(2時3時)」は、土台の「勤務時間 夜勤あり 2時3時」の列から勤務時間を選ぶ。給与は夜勤ありと同じ扱い
+NIGHT_CHOICES = ("夜勤あり", "夜勤あり(2時3時)", "夜勤なし")
+
+
+def night_shift_of(v) -> str:
+    """入稿予定表の夜勤有無を、3つのどれかにそろえる。前のチェックボックス（TRUE/FALSE）も読む。
+    空欄は ""、読めない値はそのまま返す（実行のときに止める）。"""
+    raw = str(v).strip()
+    s = re.sub(r"\s", "", unicodedata.normalize("NFKC", raw))
+    if s.upper() == "TRUE":
+        return "夜勤あり"
+    if s.upper() == "FALSE":
+        return "夜勤なし"
+    if not s:
+        return ""
+    if "なし" in s or "無" in s:
+        return "夜勤なし"
+    if "2時" in s:
+        return "夜勤あり(2時3時)"
+    if "あり" in s or "有" in s or s == "夜勤":
+        return "夜勤あり"
+    return raw
 CONFIG_DATA_START_ROW = 4
 
 
@@ -33,7 +57,7 @@ class PlanRow:
     run_date: date | None
     company: str
     category: str     # 「1クルマ」など、実行設定の職種番号と同じ表記
-    night: bool
+    night_shift: str  # 夜勤あり / 夜勤あり(2時3時) / 夜勤なし（空欄なら ""）
     count: int
     commute: str = ""     # 通勤 / 入寮（空欄なら settings.json の schedule_default_commute）
     employment: str = ""  # 正社員 / 契約社員 など
@@ -43,9 +67,18 @@ class PlanRow:
     box_word: str = ""         # 求人ボックスワード（空欄なら settings.json の defaults）
 
     @property
+    def night(self) -> bool:
+        """夜勤ありか（2時3時も夜勤あり）。給与の決め方に使う。"""
+        return self.night_shift.startswith("夜勤あり")
+
+    @property
+    def night_label(self) -> str:
+        return self.night_shift or "（夜勤有無が空欄）"
+
+    @property
     def key(self) -> str:
         d = self.run_date.isoformat() if self.run_date else "日付なし"
-        return "|".join([str(self.row), d, self.company, self.category, "夜勤あり" if self.night else "夜勤なし",
+        return "|".join([str(self.row), d, self.company, self.category, self.night_shift,
                          str(self.count), self.commute, self.employment, self.status, self.title_choice,
                          self.standby_keyword, self.box_word])
 
@@ -86,7 +119,7 @@ def read_plan(table: list[list[str]], today: date) -> list[PlanRow]:
         count = int(re.sub(r"[^\d]", "", get("原稿数")) or 0)
         raw_date = r[col["実行日"]] if col["実行日"] < len(r) else ""
         rows.append(PlanRow(i, parse_date(raw_date, today), get("会社"), get("職種"),
-                            get("夜勤有無").upper() == "TRUE", count,
+                            night_shift_of(get("夜勤有無")), count,
                             get("通勤/入寮"), employment_type(get("雇用形態")), get("入稿ステータス"),
                             get("職種名選択"), get("スタンバイキーワード"), get("求人ボックスワード")))
     return rows
@@ -168,6 +201,9 @@ def config_row(plan: PlanRow, commute: str, target: dict, rules: dict, today: da
     defaults = target.get("defaults", {})
     if re.sub(r"^\d+", "", plan.category) in ("重め", "軽め") and not plan.title_choice:
         raise ValueError(f"{plan.category} は入稿予定表の「職種名選択」列に職種名を入れてください")
+    if plan.night_shift not in NIGHT_CHOICES:
+        raise ValueError(f"入稿予定表 {plan.row}行目の夜勤有無「{plan.night_shift or '空欄'}」が読めません"
+                         f"（{' / '.join(NIGHT_CHOICES)} のどれかを選んでください）")
     pattern = defaults.get("給与パターン", "")
     if target.get("salary_from_floor"):
         pattern = salary_pattern(plan.category, plan.night, rules, pattern or "基本")
@@ -179,7 +215,7 @@ def config_row(plan: PlanRow, commute: str, target: dict, rules: dict, today: da
         "会社名": plan.company,
         "原稿数": count or plan.count,
         "給与パターン": pattern,
-        "夜勤の有無": "夜勤あり" if plan.night else "夜勤なし",
+        "夜勤の有無": plan.night_shift,
         "職種名選択": title_choice(plan),
     }
     for k, val in (("雇用形態", plan.employment), ("ステータス", status or plan.status),

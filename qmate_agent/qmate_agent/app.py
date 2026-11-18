@@ -158,7 +158,7 @@ class App:
         done = _state("schedule.json")
         results = self._results(book, settings)
         plans = [{"row": p.row, "date": fmt(p.run_date), "today": p.run_date == today, "company": p.company,
-                  "category": p.category, "night": "夜勤あり" if p.night else "夜勤なし", "commute": p.commute or "通勤",
+                  "category": p.category, "night": p.night_label, "commute": p.commute or "通勤",
                   "status": p.status or "公開", "count": p.count, "title": p.title_choice,
                   "result": results["plan"].get(p.row, ""), "check": results["plan_check"].get(p.row, ""),
                   "done": is_done(p.key, results["plan"].get(p.row, ""), done)}
