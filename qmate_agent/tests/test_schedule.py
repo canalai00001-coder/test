@@ -174,6 +174,7 @@ class TestScheduleCommand(unittest.TestCase):
                 t["gas_webapp_url"] = f"https://script.google.com/{c}/exec"
             s["takedown"]["enabled"] = self.auto_takedown
             s["schedule_targets"]["通勤"]["engine"] = self.engine
+            s["schedule_targets"]["入寮"]["engine"] = "gas"  # 入寮の試験は GAS で作る前提（本物の土台を読ませない）
             return s
         self.patches.append(mock.patch.object(cli.config, "load", settings_with_urls))
         for p in self.patches:
