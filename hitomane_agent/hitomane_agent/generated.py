@@ -6,6 +6,7 @@
 
 名前は GAS の出力シート名の「ヒトマネ出力_」を「ツール_」に変えたもの（例：ツール_新_G1_canal benefits株式会社_5半導体_20261120）。
 同じ予約をもう一度作ると上書きする。スプレッドシートには書かない。
+保存するときに、CSV（Shift_JIS）で書けない記号を似た記号に置き換える（charfix.py。置き換えた数は meta.json の replaced）。
 """
 import json
 import re
@@ -13,7 +14,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from . import config
+from . import charfix, config
 from .checks import Manuscript
 from .headers import NEW_FORMAT
 
@@ -52,6 +53,7 @@ def save(result, meta: dict) -> str:
         n += sum(tc.values())
     headers = getattr(result, "headers", None) or NEW_FORMAT
     rows = [r if isinstance(r, list) else [r[h] for h in headers] for r in result.rows]
+    rows, replaced = charfix.fix_rows(rows)  # CSV（Shift_JIS）で書けない記号を似た記号に（作るときだけ）
     (d / "manuscript.json").write_text(json.dumps({"headers": headers, "segments": segments, "rows": rows},
                                                   ensure_ascii=False), encoding="utf-8")
     (d / "meta.json").write_text(json.dumps({
@@ -59,7 +61,7 @@ def save(result, meta: dict) -> str:
         "category": result.category, "rows": len(result.rows),
         "sheet_rows": [t.sheet_row for t in result.targets if f"行{t.sheet_row}（旧FMT）" not in result.skipped],
         "skipped": result.skipped, "title_counts": result.title_counts, "content_counts": result.content_counts,
-        "loc_records": getattr(result, "loc_records", []),
+        "loc_records": getattr(result, "loc_records", []), "replaced": replaced,
         "created_at": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False, indent=1), encoding="utf-8")
     return name
 

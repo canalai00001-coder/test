@@ -125,7 +125,13 @@ def make_handler(st: State):
                                       # 実物は、ダイアログの中身を iframe（select_new_format）で表示する
                                       "<div id=dlg style='display:none'><iframe class=cboxIframe "
                                       "src=/m66w/rec_recruitment_csv_items/select_new_format></iframe>"
-                                      "<button onclick=\"document.getElementById('dlg').style.display='none'\">閉じる</button></div>" + links)
+                                      "<button onclick=\"document.getElementById('dlg').style.display='none'\">閉じる</button></div>"
+                                      # 新原稿形式移行期間中CSV取込（実物は hito_subwindow のダイアログ）
+                                      "<a href=/m66w/rec_recruitment_migrations/old_import class='btn_menu_btn04 hito_subwindow'>"
+                                      "旧原稿形式CSV取込</a>" + links)
+            if u.path == "/m66w/rec_recruitment_migrations/old_import":
+                return self.send(200, "旧原稿形式のファイルを取り込む<form method=post action=/m66w/rec_recruitment_migrations/x "
+                                      "enctype=multipart/form-data><input type=file name='file[csv]'></form>")
             if u.path == "/m66w/rec_recruitment_csv_items/select_new_format":
                 checked = " checked" if st.dup_default else ""
                 return self.send(200, "募集情報のファイルを取り込む（新フォーマット）"

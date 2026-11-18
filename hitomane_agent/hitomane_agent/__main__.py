@@ -21,7 +21,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import accounts, config, workflow
+from . import accounts, charfix, config, workflow
 
 
 def _settings(args) -> dict:
@@ -158,6 +158,9 @@ def cmd_generate(args) -> int:
             if not r.rows:
                 continue
         name = generated.save(r, {"source": "ヒトマネ実行設定"})
+        fixed = generated.meta(name).get("replaced")
+        if fixed:
+            print(f"\nグループ {r.group_id}：書けない記号を置き換えました：{charfix.summary(fixed)}")
         res = workflow.check(generated.load(name), rules)
         print(f"\nグループ {r.group_id}：{name}\n  原稿 {len(r.rows)}件、チェック {res['status']}（"
               + "、".join(f"{k} {v}件" for k, v in res["counts"].items()) + "）")
@@ -244,6 +247,9 @@ def cmd_schedule(args) -> int:
             ok = False
         else:
             name = generated.save(r, {"source": "入稿予定表", "plan_row": p.row})
+            fixed = generated.meta(name).get("replaced")
+            if fixed:
+                print(f"書けない記号を置き換えました：{charfix.summary(fixed)}")
             ms = generated.load(name)
             res = workflow.check(ms, rules)
             print(f"{name}：原稿 {len(ms.rows)}件、チェック {res['status']}（{res['report']}）")

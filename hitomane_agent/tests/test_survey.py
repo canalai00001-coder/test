@@ -6,7 +6,7 @@ from pathlib import Path
 from hitomane_agent import survey
 from tests import fake_hitomane
 
-NAMES = ["01_ログイン画面", "02_トップ", "03_ファイル取込ダイアログ", "04_募集管理", "05_取込ファイル一覧", "06_取出ファイル一覧"]
+NAMES = ["01_ログイン画面", "02_トップ", "03_ファイル取込ダイアログ", "03b_旧原稿形式CSV取込", "04_募集管理", "05_取込ファイル一覧", "06_取出ファイル一覧"]
 
 
 class Base(unittest.TestCase):
@@ -32,7 +32,7 @@ class TestSurvey(Base):
             self.assertTrue((self.out / f"{n}.html").exists(), n)
             self.assertTrue((self.out / f"{n}.png").exists(), n)
             self.assertTrue((self.out / f"{n}_links.txt").exists(), n)
-        self.assertEqual(len((self.out / "調査結果.txt").read_text(encoding="utf-8").strip().splitlines()), 6)
+        self.assertEqual(len((self.out / "調査結果.txt").read_text(encoding="utf-8").strip().splitlines()), 7)
         for f in self.out.iterdir():
             if f.suffix in (".html", ".txt"):
                 self.assertNotIn("pw=pw", f.read_text(encoding="utf-8"))
@@ -40,6 +40,7 @@ class TestSurvey(Base):
         inner = (self.out / "03_ファイル取込ダイアログ_中身.html").read_text(encoding="utf-8")
         self.assertIn("既存原稿と同じ募集番号", inner)
         self.assertIn("type=\"file\"", inner)
+        self.assertIn("旧原稿形式のファイルを取り込む", (self.out / "03b_旧原稿形式CSV取込.html").read_text(encoding="utf-8"))
 
     def test_wrong_password_stops(self):
         self.info["password"] = "ng"
@@ -57,8 +58,8 @@ class TestSurvey(Base):
     def test_missing_link_continues(self):
         self.st.reserve_link = False
         res = self.run_it()
-        self.assertTrue(all(self.step(res, n)["ok"] for n in NAMES[:4]))
-        for n in NAMES[4:]:
+        self.assertTrue(all(self.step(res, n)["ok"] for n in NAMES[:5]))
+        for n in NAMES[5:]:
             self.assertFalse(self.step(res, n)["ok"])
             self.assertIn("見つかりませんでした", self.step(res, n)["note"])
 

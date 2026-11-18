@@ -118,6 +118,7 @@ class Survey:
                 self.record("02_トップ", True, page)
                 top_links = _links(page)
                 self.step_import_dialog(page, top_url)
+                self.step_old_import(page, top_url)
                 jobs_links = self.step_jobs(page, top_url)
                 links = top_links + jobs_links
                 self.step_queue(page, links, "05_取込ファイル一覧", "取込ファイル一覧")
@@ -144,6 +145,34 @@ class Survey:
                 inner.wait_for_load_state()
                 (self.out / f"{name}_中身.html").write_text(inner.content(), encoding="utf-8")
             self.record(name, True, page, "" if inner is not None else "ダイアログの中身（iframe）は見つかりませんでした")
+            close = page.get_by_text("閉じる", exact=True)
+            if close.count() and close.first.is_visible():
+                close.first.click()
+        except Exception as e:
+            self.record(name, False, page, f"エラー: {e}")
+
+    def step_old_import(self, page: Page, top_url: str) -> None:
+        """「旧原稿形式CSV取込」（新原稿形式移行期間中CSV取込）のダイアログを開いて保存する。読むだけで、中のボタンは押さない。"""
+        name = "03b_旧原稿形式CSV取込"
+        try:
+            page.goto(top_url)
+            link = page.locator("a[href*='old_import']")
+            if not link.count():
+                self.save(name, page)
+                self.record(name, False, page, "「旧原稿形式CSV取込」のリンクが見つかりませんでした")
+                return
+            href = link.first.get_attribute("href") or ""
+            link.first.click()
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(1500)
+            self.save(name, page)
+            inner = next((f for f in page.frames if "old_import" in f.url or "migration" in f.url), None)
+            if inner is not None:
+                inner.wait_for_load_state()
+                (self.out / f"{name}_中身.html").write_text(inner.content(), encoding="utf-8")
+                (self.out / f"{name}_中身_links.txt").write_text(
+                    "\n".join(f"{x} → {h}" for x, h in _links(inner)), encoding="utf-8")
+            self.record(name, True, page, f"リンク {href}" + ("" if inner is not None else "（中身の iframe は見つかりませんでした）"))
             close = page.get_by_text("閉じる", exact=True)
             if close.count() and close.first.is_visible():
                 close.first.click()
