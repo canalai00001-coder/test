@@ -1,4 +1,4 @@
-"""入稿前のチェック（新フォーマットの出力シート）。
+"""入稿前のチェック（出力シート。新フォーマットと、施策で作る旧フォーマット）。
 
 見出し・空欄・「あり・なし」・日付・給与・お仕事番号（メモ）との一致・重複を見る。
 CSV は Shift_JIS（cp932）で書くので、その文字コードで書けない文字（絵文字など）もここで見つける。
@@ -11,7 +11,7 @@ import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import date
 
-from .headers import NEW_FORMAT, OLD_FORMAT_HEAD, OLD_FORMAT_WIDTH
+from .headers import NEW_FORMAT, OLD_FORMAT, OLD_FORMAT_HEAD, OLD_FORMAT_WIDTH
 
 
 @dataclass
@@ -86,7 +86,12 @@ class Manuscript:
         self.headers = [str(h).strip() for h in table[0]] if table else []
         width = len(self.headers)
         self.raw_rows = [(list(r) + [""] * width)[:width] for r in table[1:] if any(str(c).strip() for c in r)]
-        self.rows = [dict(zip(self.headers, r)) for r in self.raw_rows]
+        # 同じ見出しが2つあるとき（旧フォーマットの「応募方法」）は1つ目の値
+        self.rows = [{h: v for h, v in reversed(list(zip(self.headers, r)))} for r in self.raw_rows]
+
+    @property
+    def is_old_format(self) -> bool:
+        return self.headers == OLD_FORMAT
 
     def data_hash(self) -> str:
         s = json.dumps([self.headers] + self.raw_rows, ensure_ascii=False)
@@ -94,16 +99,21 @@ class Manuscript:
 
 
 def check_header(ms: Manuscript) -> list[Issue]:
-    if ms.headers == NEW_FORMAT:
+    if ms.headers in (NEW_FORMAT, OLD_FORMAT):
         return []
     if len(ms.headers) == OLD_FORMAT_WIDTH and ms.headers[:len(OLD_FORMAT_HEAD)] == OLD_FORMAT_HEAD:
-        return [Issue("error", "見出し", "旧フォーマットのシートは取り込めません（新フォーマットだけ取り込めます）")]
+        diff = next((f"{i + 1}列目が「{a}」（旧フォーマットは「{b}」）" for i, (a, b) in enumerate(zip(ms.headers, OLD_FORMAT))
+                     if a != b), "")
+        return [Issue("error", "見出し", f"見出しが旧フォーマットと違います：{diff}")]
     diff = next((f"{i + 1}列目が「{a}」（新フォーマットは「{b}」）" for i, (a, b) in enumerate(zip(ms.headers, NEW_FORMAT))
                  if a != b), f"列の数が {len(ms.headers)}（新フォーマットは {len(NEW_FORMAT)}）")
     return [Issue("error", "見出し", f"見出しが新フォーマットと違います：{diff}")]
 
 
 def check_row(row: dict, rules: dict) -> list[Issue]:
+    """1行分。旧フォーマットの行（「都道府県」の列がある）は rules の old_format の列で見る。"""
+    old = "都道府県" in row and "勤務地_都道府県" not in row
+    cols = rules.get("old_format", {}) if old else rules
     issues: list[Issue] = []
     add = lambda sev, col, msg: issues.append(Issue(sev, col, msg))
 
@@ -114,13 +124,17 @@ def check_row(row: dict, rules: dict) -> list[Issue]:
         if bad:
             add("error", col, f"CSV（Shift_JIS）に書けない文字があります：{' '.join(bad)}")
 
-    for col in rules["required_columns"]:
+    for col in cols.get("required_columns", []):
         if not (row.get(col) or "").strip():
             add("error", col, "空欄です（必須）")
-    for col in rules["usual_columns"]:
+    for col in cols.get("usual_columns", []):
         if not (row.get(col) or "").strip():
             add("warning", col, "空欄です（いつもは入っている列です）")
-    for col in rules["yes_no_columns"]:
+    for col in cols.get("flag_columns", []):
+        v = (row.get(col) or "").strip()
+        if v not in ("", "TRUE", "FALSE"):
+            add("error", col, f"「TRUE」か空欄にしてください（今は「{v}」）")
+    for col in cols.get("yes_no_columns", []):
         v = (row.get(col) or "").strip()
         if v not in ("あり", "なし"):
             add("error", col, f"「あり」か「なし」を入れてください（今は{f'「{v}」' if v else '空欄'}）")
@@ -148,7 +162,7 @@ def check_row(row: dict, rules: dict) -> list[Issue]:
 
     memo = parse_memo(row.get("お仕事番号", ""))
     if memo:
-        place = nfkc(row.get("勤務地_都道府県")) + nfkc(row.get("勤務地_市区町村"))
+        place = _place(row)
         pairs = (("基本給_最低額", memo.salary_min, lo), ("基本給_最高額", memo.salary_max, hi))
         for col, want, got in pairs:
             if want is not None and got is not None and want != got:
@@ -161,6 +175,12 @@ def check_row(row: dict, rules: dict) -> list[Issue]:
     elif (row.get("お仕事番号") or "").strip():
         add("warning", "お仕事番号", "お仕事番号がいつもの形（3-日付-…-会社名）ではないため、給与・画像・勤務地と照らし合わせていません")
     return issues
+
+
+def _place(row: dict) -> str:
+    if "都道府県" in row and "勤務地_都道府県" not in row:
+        return nfkc(row.get("都道府県")) + nfkc(row.get("市区町村"))
+    return nfkc(row.get("勤務地_都道府県")) + nfkc(row.get("勤務地_市区町村"))
 
 
 def check_sheet(ms: Manuscript, rules: dict) -> tuple[list[Issue], list[list[Issue]]]:
@@ -183,7 +203,7 @@ def check_sheet(ms: Manuscript, rules: dict) -> tuple[list[Issue], list[list[Iss
     for code, idx in dupes(lambda r: (r.get("募集番号") or "").strip()).items():
         for i in idx:
             results[i].append(Issue("error", "募集番号", f"募集番号「{code}」がシート内に{len(idx)}件あります（後の行で上書きされます）"))
-    place_of = lambda r: nfkc(r.get("勤務地_都道府県")) + nfkc(r.get("勤務地_市区町村"))
+    place_of = _place
     if ms.segments:
         # GAS の⑤検品と同じく、予約行ごと（区切りごと）に勤務地の重複を数える
         bounds = sorted(set(ms.segments) | {0}) + [len(ms.rows)]
@@ -195,12 +215,13 @@ def check_sheet(ms: Manuscript, rules: dict) -> tuple[list[Issue], list[list[Iss
             for place, idx in seen.items():
                 if len(idx) > 1:
                     for i in idx:
-                        results[i].append(Issue("warning", "勤務地_市区町村",
+                        results[i].append(Issue("warning", "市区町村" if ms.is_old_format else "勤務地_市区町村",
                                                 f"勤務地「{place}」が同じ予約行（{no}つ目）の中で重複しています"))
     else:
         for place, idx in dupes(place_of).items():
             for i in idx:
-                results[i].append(Issue("warning", "勤務地_市区町村", f"勤務地「{place}」がシート内で重複しています"))
+                results[i].append(Issue("warning", "市区町村" if ms.is_old_format else "勤務地_市区町村",
+                                        f"勤務地「{place}」がシート内で重複しています"))
     codes = sorted({(r.get("拠点コード") or "").strip() for r in ms.rows} - {""})
     if len(codes) > 1:
         sheet.append(Issue("warning", "拠点コード", f"1枚のシートに拠点コードが{len(codes)}つあります（{'・'.join(codes)}）"))

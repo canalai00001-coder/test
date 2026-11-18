@@ -157,7 +157,10 @@ class App:
         rows = [{"row": p.row, "date": f"{p.run_date:%Y/%m/%d}" if p.run_date else "（日付なし）",
                  "today": p.run_date == today, "company": p.company, "category": p.category,
                  "night": p.night, "commute": p.commute, "status": p.status, "count": p.count or "勤務地の数",
-                 "title": p.title_choice, "prefix": p.prefix, "result": p.result, "done": p.key in finished}
+                 "title": p.title_spec if p.shisaku else p.title_choice, "prefix": p.prefix, "result": p.result,
+                 "done": p.key in finished,
+                 "how": ("施策・" + "・".join(v for v in (p.fmt, p.bunrui, p.pref + p.city) if v)) if p.shisaku else "通常",
+                 "problem": p.problem() or ""}
                 for p in plan.read_plan(table, today)]
         return {"exists": True, "rows": rows, "numbers": plan.entry_numbers()}
 
@@ -427,6 +430,7 @@ tr.today td{background:#fff8c5}.coname{display:inline-block;background:#ddf4ff;c
 <section id="make" class="on">
   <div class="card"><h2>入稿予定表</h2>
     <p class="note">【AI用】ヒトマネ 求人原稿自動生成 の「入稿予定表」シートです。担当者は、実行日・会社・職種・夜勤有無・原稿数などを入れるだけです。<br>
+    作り方が「施策」の行は、＜ヒトマネ/施策用＞と同じ作り方（画像3枚・職種名指定・分類・勤務地の絞り込み・旧FMT）で作ります。旧FMT の原稿は、作ってチェックするまでです（ツールからの取り込みはまだできません）。<br>
     「今日の行をすべて実行」で、実行日が今日の行を、原稿を作る → チェック → 会社のヒトマネに入稿 → 実行結果を書く、まで行います（チェックが NG の行や、上限の 50,000件を超える行は入稿しません）。<br>
     募集番号の先頭が空欄なら、その会社にツールで前回入稿した続きの番号を使います。取り下げは予定表では行いません（「取り下げ」タブで件数を確かめてから行います）。</p>
     <div id="sched">読み込んでいます…</div>
@@ -437,7 +441,7 @@ tr.today td{background:#fff8c5}.coname{display:inline-block;background:#ddf4ff;c
     <p class="note">【AI用】ヒトマネ 求人原稿自動生成 の「ヒトマネ実行設定」シートの予約を、GAS の「③予約リストを一括実行」と同じ作り方でツールが原稿にします。
     グループ番号（1-1, 1-2 …）が同じ行は1つの原稿にまとめます。<br>
     ここでは入稿しません。使用履歴にも書きません（GAS から切り替えるまでは読むだけ）。作った原稿は「入稿」タブの「ツールで作った原稿」に並びます。<br>
-    作れるのは新FMT だけです（旧FMT はヒトマネに取り込めないため）。</p>
+    ここで作れるのは新FMT だけです（旧FMT は入稿予定表で作り方を「施策」にすると作れます）。</p>
     <div id="plan">読み込んでいます…</div>
     <div class="row" style="margin-top:12px"><button class="btn primary" onclick="makeChecked()">選んだグループをツールで作る</button>
       <button class="btn" onclick="loadPlan()">予約リストを読み直す</button>
@@ -541,9 +545,9 @@ let SCHED=[];
 async function loadSched(){sched.textContent="読み込んでいます…";try{const d=await api("/api/schedule");SCHED=d.rows;
   if(!d.exists){sched.innerHTML='<div class="empty">入稿予定表のシートがまだありません。「入稿予定表を作る・整える」で作ってください</div>';return}
   const nums=Object.entries(d.numbers||{}).map(([k,v])=>`${esc(k)}：${esc(v)}`).join("　");
-  sched.innerHTML=(d.rows.length?"<table><tr><th>行</th><th>実行日</th><th>会社</th><th>職種</th><th>夜勤</th><th>通勤/入寮</th><th>原稿数</th><th>ステータス</th><th>職種名選択</th><th>実行結果</th><th></th></tr>"+d.rows.map(r=>`<tr class="${r.today?"today":""}">
+  sched.innerHTML=(d.rows.length?"<table><tr><th>行</th><th>実行日</th><th>会社</th><th>職種</th><th>夜勤</th><th>通勤/入寮</th><th>原稿数</th><th>ステータス</th><th>作り方</th><th>職種名</th><th>実行結果</th><th></th></tr>"+d.rows.map(r=>`<tr class="${r.today?"today":""}">
    <td>${r.row}</td><td>${esc(r.date)}</td><td>${esc(r.company)}</td><td>${esc(r.category)}</td><td>${r.night?"あり":"なし"}</td><td>${esc(r.commute)}</td><td>${esc(r.count)}</td><td>${esc(r.status)}</td>
-   <td>${esc(r.title)}</td><td class="${r.result.startsWith("❌")?"ng":""}">${esc(r.result)}${r.done?' <span class="ok">（実行済み）</span>':""}</td>
+   <td>${esc(r.how)}</td><td>${esc(r.title)}</td><td class="${r.result.startsWith("❌")||r.problem?"ng":""}">${esc(r.result)}${r.problem?esc(" ⚠"+r.problem):""}${r.done?' <span class="ok">（実行済み）</span>':""}</td>
    <td><button class="btn" onclick="schedTest(${r.row})">テスト</button> <button class="btn primary" onclick="schedRun(${r.row})">この行を実行</button></td></tr>`).join("")+"</table>"
    :'<div class="empty">予定がまだ入っていません</div>')+(nums?`<p class="note">次に使う募集番号：${nums}</p>`:"")}catch(e){sched.innerHTML=`<span class="ng">${esc(e.message)}</span>`}}
 function schedRows(row){return row?SCHED.filter(r=>r.row===row):SCHED.filter(r=>r.today&&!r.done)}

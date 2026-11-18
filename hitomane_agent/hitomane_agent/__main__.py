@@ -95,6 +95,25 @@ def _books(settings):
     return gc.open_by_key(generator.BASE_SPREADSHEET_ID), gc.open_by_key(settings["spreadsheet_id"])
 
 
+def _shisaku_books(settings, need_bunrui: bool):
+    """施策用の土台と、6重め/7軽めを作るときの ＜ヒトマネ＞重め軽め職種分類 の読み方（読めなければ None と理由）。"""
+    import gspread
+
+    from . import shisaku
+    path = config.ROOT / settings["service_account_file"]
+    gc = gspread.service_account(filename=str(path))
+    base = gc.open_by_key(shisaku.BASE_SPREADSHEET_ID)
+    if not need_bunrui:
+        return base, None, ""
+    try:
+        return base, shisaku.bunrui_reader(gc.open_by_key(shisaku.BUNRUI_SPREADSHEET_ID)), ""
+    except Exception as e:
+        import json
+        who = json.loads(path.read_text(encoding="utf-8")).get("client_email", "ツールの読み取り用アカウント")
+        return base, None, (f"＜ヒトマネ＞重め軽め職種分類 を読めませんでした（{type(e).__name__}）。"
+                            f"{who} に閲覧の共有が必要です")
+
+
 def cmd_plan(args) -> int:
     from . import generator
 
@@ -202,22 +221,20 @@ def cmd_schedule(args) -> int:
     print(f"入稿予定表から {len(targets)}件 を{'テスト（作ってチェックするだけ）' if args.dry_run else '実行'}します")
     for p in targets:
         to = f" → {accounts.label(infos[p.company])}" if p.company in infos else ""
+        how = f"施策・{p.fmt}" + "".join(f"・{v}" for v in (p.title_spec, p.bunrui, p.pref + p.city) if v) \
+            if p.shisaku else "通常"
         print(f"  {p.row}行目: {p.company} / {p.category} / {'夜勤あり' if p.night else '夜勤なし'} / {p.commute} / "
-              f"{p.count or '勤務地の数'}件 / {p.status}{to}")
+              f"{p.count or '勤務地の数'}件 / {p.status} / {how}{to}")
     if not args.dry_run and not args.yes and input("原稿を作ってヒトマネに入稿します。よろしいですか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
 
-    print("\n土台を読んでいます…")
-    grids, usage = generator.load_base(base)
-    bank = generator.build_bank(grids)
     try:
         gen_targets = plan.to_targets(targets, today, plan.entry_numbers())
     except RuntimeError as e:
         print(e)
         return 1
-    results = {int(r.group_id.removeprefix("予定")): r
-               for r in generator.run(bank, plan.merge_usage(usage), gen_targets, today=today, stop_on_error=False)}
+    results = _generate_plan(targets, gen_targets, base, settings, today)
     failed = 0
     for p in targets:
         print(f"\n=== 入稿予定表 {p.row}行目 ===")
@@ -234,6 +251,9 @@ def cmd_schedule(args) -> int:
                 text, ok = f"チェックが NG のため入稿しません（{datetime.now():%m/%d %H:%M}）{name}", False
             elif args.dry_run:
                 text, ok = f"テスト済み（{datetime.now():%m/%d %H:%M}）{len(ms.rows)}件・チェック {res['status']} {name}", True
+            elif ms.is_old_format:
+                text, ok = (f"旧FMT の原稿を作ってチェックしました（{datetime.now():%m/%d %H:%M}）{len(ms.rows)}件 {name}。"
+                            "ツールからの旧FMT の取り込みはまだできないため、入稿していません"), False
             else:
                 paths = workflow.write_csvs(ms, settings, rules)
                 code, text = _import(ms, infos[p.company], paths, settings, rules, args.headed, stop_over_limit=True)
@@ -250,6 +270,40 @@ def cmd_schedule(args) -> int:
                 print(f"（実行結果を入稿予定表に書けませんでした：{e}）")
     print(f"\n{len(targets)}件中 {len(targets) - failed}件 {'テストできました' if args.dry_run else '入稿しました'}")
     return 0 if not failed else 2
+
+
+def _generate_plan(plans, gen_targets, base, settings, today) -> dict:
+    """入稿予定表の行を、作り方（通常/施策）ごとの作り方で、上の行から順に作る。{行: GroupResult}。
+
+    募集番号は、作り方が違っても同じ会社なら前の行の続きを使う。使う土台だけを読む。"""
+    from . import generator, plan, shisaku
+
+    results, bank, usage, sbase, reader, why = {}, None, None, None, None, ""
+    if any(not p.shisaku for p in plans):
+        print("\n土台を読んでいます…")
+        grids, usage = generator.load_base(base)
+        bank, usage = generator.build_bank(grids), plan.merge_usage(usage)
+    if any(p.shisaku for p in plans):
+        print("施策用の土台を読んでいます…")
+        need = any(p.shisaku and generator._content_category(p.category) in ("重め", "軽め") for p in plans)
+        sbook, reader, why = _shisaku_books(settings, need)
+        sbase = plan.merge_shisaku_usage(shisaku.load_base(sbook))
+    continuation = {}
+    for p, t in zip(plans, gen_targets):
+        problem = p.problem()
+        if problem:
+            results[p.row] = generator.GroupResult(t.group_id, "", p.company, p.category, [t], error=problem)
+            continue
+        if p.shisaku:
+            if reader is None and why and generator._content_category(p.category) in ("重め", "軽め"):
+                results[p.row] = generator.GroupResult(t.group_id, "", p.company, p.category, [t], error=why)
+                continue
+            rs = shisaku.run(sbase, [t], reader, today=today, continuation=continuation)
+        else:
+            rs = generator.run(bank, usage, [t], today=today, stop_on_error=False, continuation=continuation)
+        if rs:
+            results[p.row] = rs[0]
+    return results
 
 
 def cmd_compare(args) -> int:

@@ -50,14 +50,16 @@ def save(result, meta: dict) -> str:
     for tc in result.title_counts:
         segments.append(n)
         n += sum(tc.values())
-    (d / "manuscript.json").write_text(json.dumps({"headers": NEW_FORMAT, "segments": segments,
-                                                   "rows": [[r[h] for h in NEW_FORMAT] for r in result.rows]},
+    headers = getattr(result, "headers", None) or NEW_FORMAT
+    rows = [r if isinstance(r, list) else [r[h] for h in headers] for r in result.rows]
+    (d / "manuscript.json").write_text(json.dumps({"headers": headers, "segments": segments, "rows": rows},
                                                   ensure_ascii=False), encoding="utf-8")
     (d / "meta.json").write_text(json.dumps({
         **meta, "name": name, "gas_name": result.name, "group": result.group_id, "company": result.company,
         "category": result.category, "rows": len(result.rows),
-        "sheet_rows": [t.sheet_row for t in result.targets if t.format == "新FMT"], "skipped": result.skipped,
-        "title_counts": result.title_counts, "content_counts": result.content_counts,
+        "sheet_rows": [t.sheet_row for t in result.targets if f"行{t.sheet_row}（旧FMT）" not in result.skipped],
+        "skipped": result.skipped, "title_counts": result.title_counts, "content_counts": result.content_counts,
+        "loc_records": getattr(result, "loc_records", []),
         "created_at": datetime.now().isoformat(timespec="seconds")}, ensure_ascii=False, indent=1), encoding="utf-8")
     return name
 

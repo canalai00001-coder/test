@@ -4,6 +4,10 @@
 原稿を作る（generator。GAS の③と同じ作り方）→ チェック → 選んだ会社のヒトマネに入稿 → 実行結果を書き戻す、までを行う。
 
 - 1行＝1回の生成予約（GAS の「ヒトマネ実行設定」の1行と同じ中身）。グループは行ごとに分ける（グループ番号「予定<行>」）。
+- 作り方は2つ。「通常」（空欄も）は【AI用】ヒトマネの GAS と同じ作り方（generator.py。新FMT だけ）。
+  「施策」は ＜ヒトマネ/施策用＞ の GAS と同じ作り方（shisaku.py）で、フォーマット（旧FMT/新FMT）・職種名指定・分類・
+  勤務地_都道府県・勤務地_市区町村 が使える。画像は3枚（画像カテゴリー・転職サポート・社名入り）になる。
+  旧FMT は作ってチェックするまで（ツールからの取り込みは、管理画面の「旧原稿形式CSV取込」を確かめてから作る）。
 - 募集番号の先頭が空欄なら、その会社にツールで前回入稿した続きの番号を使う（state/entry_numbers.json）。
   初めての会社は入れてもらう。
 - 入稿した原稿の職種名・仕事内容は、このパソコンの記録（state/usage_local.json）に残し、次に作るときに使用履歴と合わせて
@@ -15,21 +19,29 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from . import config, generator
+from . import config, generator, shisaku
 
 SHEET = "入稿予定表"
 LIST_SHEET = "_入稿予定表_プルダウン（自動生成・編集不要）"
-# 見出し（改行のあとは担当者向けの補足。読むときは改行の前だけを見る）
+# 見出し（改行やかっこのあとは担当者向けの補足。読むときは名前だけを見る）
 HEADERS = ["実行日", "会社", "職種", "夜勤有無", "通勤/入寮", "雇用形態", "入稿ステータス",
+           "作り方\n(空欄=通常)", "フォーマット\n(空欄=新FMT)",
            "原稿数\n(空欄=勤務地の数)", "画像カテゴリー", "給与パターン\n(空欄=基本)",
-           "職種名選択\n(6重め/7軽めのみ・必須)", "タイトル末尾ワード\n(空欄=タイトルシートの値)",
+           "職種名選択\n(通常の6重め/7軽めのみ・必須)",
+           "職種名指定\n(施策のみ・空欄=ランダム)", "分類\n(施策の6重め/7軽めのみ・必須)",
+           "勤務地_都道府県\n(施策のみ・空欄=全勤務地)", "勤務地_市区町村\n(施策のみ・空欄=県内すべて)",
+           "タイトル末尾ワード\n(空欄=タイトルシートの値)",
            "募集番号の先頭\n(空欄=前回の続き)", "実行結果", "メモ"]
 REQUIRED = ("実行日", "会社", "職種")
-DEFAULTS = {"通勤/入寮": "通勤", "雇用形態": "正社員", "入稿ステータス": "掲載", "給与パターン": "基本"}
+DEFAULTS = {"通勤/入寮": "通勤", "雇用形態": "正社員", "入稿ステータス": "掲載", "給与パターン": "基本", "作り方": "通常",
+            "フォーマット": "新FMT"}
+METHODS = ("通常", "施策")
+SHISAKU_ONLY = ("職種名指定", "分類", "勤務地_都道府県", "勤務地_市区町村")
 
 
 def header_name(h) -> str:
-    return str(h).strip().split("\n")[0].strip()
+    """見出しの名前（改行やかっこのあとの補足は見ない。「職種名指定(空欄=ランダム)」→「職種名指定」）。"""
+    return re.split(r"[\n(（]", str(h).strip())[0].strip()
 
 
 @dataclass
@@ -49,14 +61,43 @@ class PlanRow:
     dedup_word: str
     prefix: str
     result: str
+    method: str = "通常"
+    fmt: str = "新FMT"
+    title_spec: str = ""
+    bunrui: str = ""
+    pref: str = ""
+    city: str = ""
 
     @property
     def key(self) -> str:
         """実行済みかどうかを覚えるための印（中身が変われば別の予定とみなす）。"""
         d = self.run_date.isoformat() if self.run_date else "日付なし"
-        return "|".join([str(self.row), d, self.company, self.category, "夜勤あり" if self.night else "夜勤なし",
-                         self.commute, self.employment, self.status, self.count, self.image, self.salary,
-                         self.title_choice, self.dedup_word, self.prefix])
+        parts = [str(self.row), d, self.company, self.category, "夜勤あり" if self.night else "夜勤なし",
+                 self.commute, self.employment, self.status, self.count, self.image, self.salary,
+                 self.title_choice, self.dedup_word, self.prefix]
+        if self.method != "通常" or self.fmt != "新FMT" or self.title_spec or self.bunrui or self.pref or self.city:
+            parts += [self.method, self.fmt, self.title_spec, self.bunrui, self.pref, self.city]  # 前からの行は印を変えない
+        return "|".join(parts)
+
+    @property
+    def shisaku(self) -> bool:
+        return self.method == "施策"
+
+    def problem(self) -> str | None:
+        """この行をそのまま作れない理由（作り方と、施策だけの列の組み合わせ）。"""
+        if self.method not in METHODS:
+            return f"作り方「{self.method}」は「通常」か「施策」にしてください"
+        if self.fmt not in ("新FMT", "旧FMT"):
+            return f"フォーマット「{self.fmt}」は「新FMT」か「旧FMT」にしてください"
+        if not self.shisaku:
+            used = [n for n, v in zip(SHISAKU_ONLY, (self.title_spec, self.bunrui, self.pref, self.city)) if v]
+            if used:
+                return f"「{'」「'.join(used)}」は作り方が「施策」のときだけ使います（作り方を「施策」にするか、空欄にしてください）"
+            if self.fmt == "旧FMT":
+                return "通常の作り方で作れるのは新FMT だけです（旧FMT は作り方を「施策」にしてください）"
+        elif self.title_choice:
+            return "施策の作り方では「職種名選択」は使いません。職種名を決めるときは「職種名指定」に入れてください"
+        return None
 
 
 def parse_date(s, today: date) -> date | None:
@@ -94,7 +135,9 @@ def read_plan(table: list[list], today: date) -> list[PlanRow]:
                             get("通勤/入寮") or DEFAULTS["通勤/入寮"], get("雇用形態") or DEFAULTS["雇用形態"],
                             get("入稿ステータス") or DEFAULTS["入稿ステータス"], get("原稿数"), get("画像カテゴリー"),
                             get("給与パターン") or DEFAULTS["給与パターン"], get("職種名選択"), get("タイトル末尾ワード"),
-                            get("募集番号の先頭"), get("実行結果")))
+                            get("募集番号の先頭"), get("実行結果"), get("作り方") or DEFAULTS["作り方"],
+                            (get("フォーマット") or DEFAULTS["フォーマット"]).upper().replace("ＦＭＴ", "FMT"),
+                            get("職種名指定"), get("分類"), get("勤務地_都道府県"), get("勤務地_市区町村")))
     return rows
 
 
@@ -118,11 +161,12 @@ def to_targets(plans: list[PlanRow], today: date, numbers: dict) -> list[generat
         count = p.count.replace(",", "")
         out.append(generator.Target(
             sheet_row=p.row, group_id=f"予定{p.row}", seq=1, creation_date=f"{today:%Y/%m/%d}", commute=p.commute,
-            employment=p.employment, category=p.category, company=p.company, format="新FMT",
+            employment=p.employment, category=p.category, company=p.company, format=p.fmt,
             count=None if count == "" else (int(count) if count.isdigit() else float("nan")), count_raw=p.count,
             entry_prefix=prefix, status=p.status, image_category=p.image, salary_pattern=p.salary,
-            night_shift="夜勤あり" if p.night else "夜勤なし", paired_title=title_choice(p),
-            title_dedup_word=p.dedup_word, exec_status=""))
+            night_shift="夜勤あり" if p.night else "夜勤なし", paired_title="" if p.shisaku else title_choice(p),
+            title_dedup_word=p.dedup_word, exec_status="", title_spec=p.title_spec, bunrui=p.bunrui, pref=p.pref,
+            city=p.city))
     return out
 
 
@@ -163,6 +207,8 @@ def record_usage(meta: dict) -> None:
             data["titles"].append([company, category, title, "1", str(n), stamp])
     for cc in meta.get("content_counts", []):
         data["contents"].extend([company, category, c] for c in cc)
+    if meta.get("loc_records"):  # 施策：会社×勤務地×職種名
+        data.setdefault("locations", []).extend(meta["loc_records"])
     _save("usage_local.json", data)
 
 
@@ -173,6 +219,11 @@ def merge_usage(usage: generator.Usage) -> generator.Usage:
     for comp, cat, content in data.get("contents", []):
         usage.content_used.setdefault(f"{comp}||{cat}", set()).add(content)
     return usage
+
+
+def merge_shisaku_usage(base):
+    """施策用の土台の使用履歴に、このパソコンでツールが入稿した分を足す。"""
+    return shisaku.remember_local(base, _load("usage_local.json") or {})
 
 
 def done() -> dict:
@@ -218,12 +269,16 @@ def setup_sheet(book, bank: generator.Bank) -> list[str]:
     rows = max(ws.row_count, 1000)
 
     companies = list(bank.companies)
+    # 6重め/7軽めは、施策では ＜ヒトマネ＞重め軽め職種分類 から作るので、土台に無くても選べるようにする
     categories = [generator.CATEGORY_NUMBER_LABEL[c] for c in generator.CATEGORY_NAMES
-                  if bank.job_titles.get(generator.CATEGORY_NUMBER_LABEL[c]) or bank.paired_job_data.get(c)]
+                  if bank.job_titles.get(generator.CATEGORY_NUMBER_LABEL[c]) or bank.paired_job_data.get(c)
+                  or c in ("重め", "軽め")]
+    prefs = list(dict.fromkeys(loc["pref"] for loc in bank.locations))
     images = list(bank.images_by_category)
     titles = [f"{generator.CATEGORY_NUMBER_LABEL[c]}｜{e['title']}" for c in ("重め", "軽め")
               for e in bank.paired_job_data.get(c, [])]
-    lists = [("会社", companies), ("職種", categories), ("画像カテゴリー", images), ("職種名選択", titles)]
+    lists = [("会社", companies), ("職種", categories), ("画像カテゴリー", images), ("職種名選択", titles),
+             ("勤務地_都道府県", prefs)]
     if LIST_SHEET in names:
         lst = book.worksheet(LIST_SHEET)
         lst.clear()
@@ -236,6 +291,8 @@ def setup_sheet(book, bank: generator.Bank) -> list[str]:
     lst.update(range_name="A1", values=table)
 
     def cell_range(col_name):
+        if col_name not in head:
+            return None
         c = head.index(col_name)
         return {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": rows, "startColumnIndex": c, "endColumnIndex": c + 1}
 
@@ -251,10 +308,16 @@ def setup_sheet(book, bank: generator.Bank) -> list[str]:
             rule("通勤/入寮", one_of(["通勤", "入寮"])),
             rule("雇用形態", one_of(["正社員", "契約社員", "その他"])),
             rule("入稿ステータス", one_of(["掲載", "非掲載"])),
-            rule("給与パターン", one_of([p for p in ("基本", "高額", "低額") if p in bank.salary_patterns] or ["基本"]))]
+            rule("作り方", one_of(list(METHODS))),
+            rule("フォーマット", one_of(["新FMT", "旧FMT"])),
+            rule("分類", one_of(shisaku.BUNRUI_OPTIONS)),
+            # 「25万」などは施策の作り方だけ
+            rule("給与パターン", one_of([p for p in ("基本", "高額", "低額") if p in bank.salary_patterns]
+                                    + shisaku.SALARY_MAN_OPTIONS))]
     for i, (n, vals) in enumerate(lists):
         if vals:
             reqs.append(rule(n, in_list(i, len(vals))))
+    reqs = [r for r in reqs if r["setDataValidation"]["range"] is not None]  # 見出しの無い列は飛ばす
     reqs += [
         {"repeatCell": {"range": {"sheetId": ws.id, "startRowIndex": 0, "endRowIndex": 1},
                         "cell": {"userEnteredFormat": {"textFormat": {"bold": True}, "wrapStrategy": "WRAP",
@@ -268,7 +331,7 @@ def setup_sheet(book, bank: generator.Bank) -> list[str]:
     ]
     book.batch_update({"requests": reqs})
     done_list.append(f"プルダウンを付けました（会社 {len(companies)}社・職種 {len(categories)}種類・画像カテゴリー {len(images)}種類・"
-                     f"職種名選択 {len(titles)}件。夜勤有無はチェックボックス）")
+                     f"職種名選択 {len(titles)}件・都道府県 {len(prefs)}。作り方・フォーマット・分類も。夜勤有無はチェックボックス）")
     return done_list
 
 

@@ -63,3 +63,43 @@ def grids() -> list[g.Grid]:
 
 def usage(title_rows=(), content_rows=()):
     return g.load_usage([list(r) for r in title_rows], [list(r) for r in content_rows])
+
+
+# ---- 施策用の土台（＜土台/施策用＞の形。2026-11-18 に実物を見て作った）
+
+def shisaku_grids() -> list[g.Grid]:
+    out = [x for x in grids() if x.name not in ("画像", "タイトル", "7軽め", "応募資格・勤務時間・休日・PR")]
+    out.append(g.Grid("応募資格・勤務時間・休日・PR", [
+        ["PR\n(正社員)", "勤務時間\n夜勤あり", "勤務時間\n夜勤なし", "勤務期間", "応募資格\n(正社員)", "待遇\n(正社員)",
+         "給与", "休日・休暇", "応募方法_補足", "お仕事内容上", "お仕事内容下"],
+        ["2000文字まで", "2000文字まで", "", "2000文字まで", "2000文字まで", "2000文字まで", "", "4000済", "", "", ""],
+        ["PRの文", "夜勤ありの勤務時間", "夜勤なしの勤務時間", "", "未経験OK", "＜待遇＞", "給与の文", "土日祝休み",
+         "＜応募方法＞WEB", "＼上の文／", "＼下の文／"]]))
+    out.append(g.Grid("画像", [["", "軽作業", "製造", "工場", "入寮", "転職サポート", "社名入り_canal benefits株式会社"],
+                             ["1", "軽作業(1)", "製造(1)", "工場(1)", "寮画像 (1)", "転職(1)", "canal benefits株式会社(1)"]]))
+    return out
+
+
+SHISAKU_TITLE_ROWS = [["1", "急募", "／", "製造スタッフ", "／", "最短入社", "／", "寮費無料×即日勤務", "／", "見本"],
+                      ["2", "急募", "／", "製造スタッフ", "／", "即日入社可", "／", "学歴不問×正社員", "／", "見本"]]
+
+BUNRUI_SHEETS = {
+    "7軽め_工場系で手のひら_ヒトマネ用": [["グラスの検品", "A", "品質管理", "グラスのお仕事1", "グラスのお仕事2"],
+                                     ["メガネケースの検査", "B", "品質管理", "メガネのお仕事"],
+                                     ["仕事内容の無い職種", "C", ""]],
+    "7軽め_倉庫系_ヒトマネ用": [["倉庫の仕分け", "D", "倉庫", "倉庫のお仕事"]],
+    "7軽め_工場系で重労働_ヒトマネ用": [],
+    "7軽め_工場系でそこまで重労働ではない_ヒトマネ用": [],
+}
+
+
+def bunrui_reader(name):
+    if name not in BUNRUI_SHEETS:
+        raise g.GenerateError(f"「＜ヒトマネ＞重め軽め職種分類」に「{name}」シートが見つかりません")
+    return [list(r) for r in BUNRUI_SHEETS[name]]
+
+
+def shisaku_base(loc_rows=(), content_rows=()):
+    from hitomane_agent import shisaku
+    return shisaku.from_grids(shisaku_grids(), SHISAKU_TITLE_ROWS, [list(r) for r in loc_rows],
+                              [list(r) for r in content_rows])

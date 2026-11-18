@@ -55,6 +55,9 @@ def _upload_key(account: str, name: str) -> str:
 
 def upload_problem(ms: Manuscript, account: str = "") -> str | None:
     """入稿してはいけない理由（なければ None）。入稿済みかどうかは会社（account）ごとに見る。"""
+    if ms.headers and ms.headers[0] == "募集番号" and len(ms.headers) == 109:
+        return ("旧フォーマット（旧FMT）の原稿です。ツールからの取り込みはまだ作っていません"
+                "（管理画面の「旧原稿形式CSV取込」を確かめてから使えるようにします）")
     rv = load_state("reviews.json").get(ms.name)
     if not rv:
         return "チェックをしていません。先にチェックしてください"

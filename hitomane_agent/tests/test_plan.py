@@ -15,13 +15,14 @@ from tests.test_workflow import FakeUploader
 
 TODAY = date(2026, 11, 20)
 H = plan.HEADERS
+RES = [plan.header_name(h) for h in H].index("実行結果") + 1  # 実行結果の列（1始まり）
 
 
 def prow(d="2026/11/20", company="canal benefits株式会社", category="5半導体", night="TRUE", count="2", prefix="",
-         title="", image="製造", result=""):
+         title="", image="製造", result="", **more):
     r = dict.fromkeys([plan.header_name(h) for h in H], "")
     r.update({"実行日": d, "会社": company, "職種": category, "夜勤有無": night, "原稿数": count, "募集番号の先頭": prefix,
-              "職種名選択": title, "画像カテゴリー": image, "実行結果": result})
+              "職種名選択": title, "画像カテゴリー": image, "実行結果": result, **more})
     return [r[plan.header_name(h)] for h in H]
 
 
@@ -72,6 +73,38 @@ class TestRead(unittest.TestCase):
             ("予定4", "eightbee500", "", "夜勤あり", "新FMT")])
         self.assertEqual(ts[0].creation_date, "2026/11/20")
 
+    def test_header_names(self):
+        self.assertEqual(plan.header_name("職種名指定(空欄=ランダム)"), "職種名指定")
+        self.assertEqual(plan.header_name("原稿数\n(空欄=勤務地の数)"), "原稿数")
+        # 担当者が足した見出しの形（2026-11-18 の入稿予定表）でも読める
+        head = ["実行日", "会社", "職種", "夜勤有無", "フォーマット", "職種名指定(空欄=ランダム)", "分類(6重め/7軽めのみ)",
+                "勤務地_都道府県", "勤務地_市区町村"]
+        p = plan.read_plan([head, ["2026/11/20", "合同会社Y Gift", "7軽め", "TRUE", "旧FMT", "グラスの検品", "手のひら",
+                                   "宮崎県", "日向市"]], TODAY)[0]
+        self.assertEqual((p.method, p.fmt, p.title_spec, p.bunrui, p.pref, p.city),
+                         ("通常", "旧FMT", "グラスの検品", "手のひら", "宮崎県", "日向市"))
+        self.assertIn("施策", p.problem())  # 作り方が通常のままでは作らない
+
+    def test_problems(self):
+        read = lambda **k: plan.read_plan([H, prow(**k)], TODAY)[0]
+        self.assertIsNone(read().problem())
+        self.assertIn("新FMT だけ", read(フォーマット="旧FMT").problem())
+        self.assertIn("「勤務地_都道府県」は作り方が「施策」", read(勤務地_都道府県="宮崎県").problem())
+        self.assertIsNone(read(作り方="施策", フォーマット="旧FMT", 勤務地_都道府県="宮崎県").problem())
+        self.assertIn("職種名指定", read(作り方="施策", title="グラスの検品").problem())
+        self.assertIn("「通常」か「施策」", read(作り方="特別").problem())
+        self.assertIn("「新FMT」か「旧FMT」", read(作り方="施策", フォーマット="FMT").problem())
+        # 前からの行（通常・新FMT）は、実行済みの印が変わらない
+        self.assertEqual(read().key.count("|"), 13)
+        self.assertNotEqual(read().key, read(作り方="施策").key)
+
+    def test_shisaku_targets(self):
+        rows = plan.read_plan([H, prow(作り方="施策", フォーマット="旧FMT", 職種名指定="グラスの検品", 分類="手のひら",
+                                       勤務地_都道府県="宮崎県", 勤務地_市区町村="日向市", prefix="Y1")], TODAY)
+        t = plan.to_targets(rows, TODAY, {})[0]
+        self.assertEqual((t.format, t.title_spec, t.bunrui, t.pref, t.city, t.paired_title),
+                         ("旧FMT", "グラスの検品", "手のひら", "宮崎県", "日向市", ""))
+
     def test_next_number(self):
         self.assertEqual(plan.next_number("canalbenefits000199"), "canalbenefits000200")
 
@@ -118,8 +151,8 @@ class TestSchedule(unittest.TestCase):
         code, out = self.cli("--yes")
         self.assertEqual(code, 0, out)
         self.assertEqual(len(FakeUploader.calls), 2)
-        self.assertEqual(sorted(self.book.ws.cells), [(2, 14), (3, 14)])  # 実行結果の列
-        self.assertTrue(self.book.ws.cells[(2, 14)].startswith("入稿済み"))
+        self.assertEqual(sorted(self.book.ws.cells), [(2, RES), (3, RES)])  # 実行結果の列
+        self.assertTrue(self.book.ws.cells[(2, RES)].startswith("入稿済み"))
         self.assertEqual(plan.entry_numbers(), {"canal benefits株式会社": "CB4"})  # 2件＋1件のあと
         self.assertEqual(len(plan.done()), 2)
         # もう一度動かしても、実行済みの行はやらない
@@ -136,13 +169,43 @@ class TestSchedule(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("上限 50,000件を超えます", out)
         self.assertEqual(FakeUploader.calls, [])
-        self.assertTrue(self.book.ws.cells[(2, 14)].startswith("❌"))
+        self.assertTrue(self.book.ws.cells[(2, RES)].startswith("❌"))
 
     def test_ng_is_not_uploaded(self):
         self.book.ws.table[1] = prow(prefix="CB1", category="9検査")  # 職種名の無いカテゴリー
         code, out = self.cli("--yes", "--row", "2")
         self.assertEqual(code, 2)
         self.assertIn("作れませんでした", out)
+        self.assertEqual(FakeUploader.calls, [])
+
+    def test_shisaku_rows(self):
+        shisaku_patches = (mock.patch.object(cli, "_shisaku_books", return_value=(None, None, "")),
+                           mock.patch("hitomane_agent.shisaku.load_base", side_effect=lambda book: s.shisaku_base()))
+        for p in shisaku_patches:
+            p.start()
+            self.addCleanup(p.stop)
+        # 旧FMT は作ってチェックするまで（入稿しない）
+        self.book.ws.table[1] = prow(prefix="CB1", 作り方="施策", フォーマット="旧FMT", 勤務地_都道府県="東京都")
+        code, out = self.cli("--yes", "--row", "2")
+        self.assertEqual(code, 2, out)
+        self.assertIn("ツールからの旧FMT の取り込みはまだできない", out)
+        self.assertEqual(FakeUploader.calls, [])
+        self.assertTrue(self.book.ws.cells[(2, RES)].startswith("❌旧FMT の原稿を作ってチェックしました"))
+        # 新FMT は入稿する。勤務地×職種名をこのパソコンの記録に残す
+        self.book.ws.table[1] = prow(prefix="CB1", 作り方="施策", 勤務地_都道府県="東京都")
+        code, out = self.cli("--yes", "--row", "2")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(FakeUploader.calls), 1)
+        self.assertIn("施策・新FMT・東京都", out)
+        base = plan.merge_shisaku_usage(s.shisaku_base())
+        # 原稿数 2 を東京都の勤務地（葛飾区だけ）に作ったので、職種名は2つとも使った
+        self.assertEqual(base.loc_used["canal benefits株式会社||東京都||葛飾区"], {"半導体の製造A", "半導体の製造B"})
+
+    def test_problem_row_is_not_made(self):
+        self.book.ws.table[1] = prow(prefix="CB1", 勤務地_都道府県="東京都")  # 作り方が通常のまま
+        code, out = self.cli("--yes", "--row", "2")
+        self.assertEqual(code, 2)
+        self.assertIn("作り方が「施策」のときだけ", out)
         self.assertEqual(FakeUploader.calls, [])
 
     def test_unknown_company(self):
