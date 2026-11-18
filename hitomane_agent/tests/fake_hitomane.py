@@ -117,7 +117,7 @@ def make_handler(st: State):
             if u.path == "/m66w/":
                 return self.send(200, "<form method=post action=/m66w/login>ユーザーID<input type=text name=uid>"
                                       "パスワード<input type=password name=pw><button type=submit>ログイン</button></form>")
-            if u.path == "/m66w/top":
+            if u.path in ("/m66w/top", "/m66w/menu"):
                 links = ("<a href=/m66w/csv_import_queues>取込ファイル一覧</a>"
                          "<a href=/m66w/csv_export_queues>取出ファイル一覧</a>") if st.reserve_link else ""
                 return self.send(200, "<h2>募集情報を管理する</h2><a href=/m66w/rec_recruitments>募集管理</a>"
@@ -126,12 +126,23 @@ def make_handler(st: State):
                                       "<div id=dlg style='display:none'><iframe class=cboxIframe "
                                       "src=/m66w/rec_recruitment_csv_items/select_new_format></iframe>"
                                       "<button onclick=\"document.getElementById('dlg').style.display='none'\">閉じる</button></div>"
-                                      # 新原稿形式移行期間中CSV取込（実物は hito_subwindow のダイアログ）
-                                      "<a href=/m66w/rec_recruitment_migrations/old_import class='btn_menu_btn04 hito_subwindow'>"
-                                      "旧原稿形式CSV取込</a>" + links)
+                                      # 新原稿形式移行期間中CSV取込。実物と同じく、折りたたまれた欄の中にあってマウスでは押せない。
+                                      # 押すとダイアログ（iframe）で old_import を開く
+                                      "<div style='height:0;overflow:hidden'><a href=/m66w/rec_recruitment_migrations/old_import "
+                                      "class='btn_menu_btn04 hito_subwindow' onclick=\"var d=document.getElementById('dlg2');"
+                                      "d.innerHTML='<iframe src=/m66w/rec_recruitment_migrations/old_import></iframe>';"
+                                      "d.style.display='block';return false;\">旧原稿形式CSV取込</a></div>"
+                                      "<div id=dlg2 style='display:none'></div>" + links)
             if u.path == "/m66w/rec_recruitment_migrations/old_import":
-                return self.send(200, "旧原稿形式のファイルを取り込む<form method=post action=/m66w/rec_recruitment_migrations/x "
-                                      "enctype=multipart/form-data><input type=file name='file[csv]'></form>")
+                # 実物（2026-11-18 の画面調査）と同じ作り。送り先は complete、format_name は hmgrfrm
+                return self.send(200, "募集情報のファイルを取り込む （旧フォーマット）"
+                                      "<form id=rec_form method=post action=/m66w/rec_recruitment_csv_items/complete "
+                                      "enctype=multipart/form-data><input type=hidden name=format_name value=hmgrfrm>"
+                                      "<input id=file_csv name='file[csv]' type=file>"
+                                      "<input type=checkbox name=duplicate_check_term id=duplicate_check_term value=1>"
+                                      "<a href=# class=btn_operation_btn02 onclick='queue_import();'>ファイル取込予約</a></form>"
+                                      "<script>function queue_import() { if (confirm('ファイル取込予約を行いますか？')) "
+                                      "document.getElementById('rec_form').submit(); }</script>")
             if u.path == "/m66w/rec_recruitment_csv_items/select_new_format":
                 checked = " checked" if st.dup_default else ""
                 return self.send(200, "募集情報のファイルを取り込む（新フォーマット）"
@@ -237,11 +248,12 @@ def make_handler(st: State):
             if u.path.startswith("/m66w/rec_recruitments/update/"):
                 st.saved = True
                 return self.send(200, "saved")
-            if u.path == "/m66w/rec_recruitment_csv_items/complete_new_format":
+            if u.path in ("/m66w/rec_recruitment_csv_items/complete_new_format", "/m66w/rec_recruitment_csv_items/complete"):
                 boundary = re.search(r"boundary=(.+)", self.headers["Content-Type"]).group(1).encode()
                 part = next(p for p in raw.split(b"--" + boundary) if b'name="file[csv]"' in p)
                 data = part.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n", 1)[0]
-                st.imports.append({"file": data, "dup": b'name="duplicate_check_term"' in raw})
+                st.imports.append({"file": data, "dup": b'name="duplicate_check_term"' in raw,
+                                   "old": u.path.endswith("/complete")})
                 st.import_reserved = True
                 st.import_refreshes = 0
                 # 実物は、予約するとダイアログが閉じて募集管理の画面が読み込み直される（iframe はなくなる）

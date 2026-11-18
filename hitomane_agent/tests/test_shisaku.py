@@ -137,9 +137,11 @@ class TestOldFormat(unittest.TestCase):
         sheet, issues = checks.check_sheet(ms, config.load("rules.json"))
         self.assertEqual(sheet, [])
         self.assertFalse([i for r in issues for i in r if i.severity == "error"])
-        # ツールからはまだ取り込まない
-        from hitomane_agent import workflow
-        self.assertIn("旧フォーマット（旧FMT）の原稿です", workflow.upload_problem(ms))
+        # CSV（Shift_JIS）にすると109列（「応募方法」は2つ）
+        from hitomane_agent.csv_export import to_csv_bytes
+        head = to_csv_bytes(ms).decode("cp932").split("\r\n")[0].split(",")
+        self.assertEqual(len(head), 109)
+        self.assertEqual(head.count("応募方法"), 2)
 
 
 class TestBunrui(unittest.TestCase):

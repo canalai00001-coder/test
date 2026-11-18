@@ -30,8 +30,9 @@ class FakeUploader:
     def account(self):
         return {"total": FakeUploader.total_value, "branches": FakeUploader.branches}
 
-    def upload(self, files):
+    def upload(self, files, old_format=False):
         FakeUploader.calls.append([Path(f).read_bytes() for f in files])
+        FakeUploader.old_formats = getattr(FakeUploader, "old_formats", []) + [old_format]
         return [UploadResult(Path(f).name, FakeUploader.ok, "取り込みが終わりました（完了）") for f in files]
 
 

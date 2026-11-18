@@ -91,3 +91,46 @@ def count(page: Page) -> int | None:
     """画面の「全N件」。"""
     m = re.search(r"全\s*([\d,]+)\s*件", page.inner_text("body"))
     return int(m.group(1).replace(",", "")) if m else None
+
+
+def hide_notice(page: Page) -> None:
+    """ログイン直後のトップに出る「お知らせ」の窓（colorbox）を、この画面の上だけで隠す。
+
+    窓の「閉じる」（a.seen_notice）は押さない。押すとヒトマネ側でそのお知らせが既読になるため（2026-11-18 の画面調査）。"""
+    page.evaluate("""() => { for (const id of ['colorbox', 'cboxOverlay']) {
+        const e = document.getElementById(id); if (e) e.style.display = 'none'; } }""")
+
+
+def open_old_import(page: Page) -> None:
+    """トップ（menu）で「旧原稿形式CSV取込」のダイアログを開く。お知らせの窓は既読にしないで隠す。
+
+    リンクは折りたたまれた欄の中で画面の外にあるので、マウスでは押せない。画面の上でクリックを起こしてサイトのダイアログを開き、
+    隠したダイアログの枠を見えるように戻す（お知らせと同じ枠を使うため）。"""
+    hide_notice(page)
+    link = page.locator("a[href*='old_import']")
+    if not link.count():
+        raise RuntimeError("「旧原稿形式CSV取込」のリンクが見つかりませんでした")
+    link.first.evaluate("a => a.click()")
+    page.wait_for_timeout(500)
+    page.evaluate("""() => { for (const id of ['colorbox', 'cboxOverlay']) {
+        const e = document.getElementById(id); if (e) e.style.display = ''; } }""")
+
+
+def show_section(page: Page, section: str) -> None:
+    """トップの折りたたまれた欄（「＋」で開く）を、この画面の上だけで開く（「＋」は押さない。開いた状態がヒトマネ側に残るため）。"""
+    page.evaluate("s => { const e = document.getElementById(s); if (e) e.style.display = 'block'; }", section)
+
+
+def dialog_frame(page: Page, format_name: str = "hmgrfrm"):
+    """開いているダイアログの中身の iframe のうち、取込フォームの format_name が合うもの（無ければ None）。
+
+    hmgrfrm＝旧フォーマット、newhmgrfrm＝新フォーマット（2026-11-18 の画面調査）。旧原稿形式CSV取込は、iframe の URL が
+    old_import のままとは限らない（URL で探すと見つからなかった）ので、iframe の要素から中身をたどり、フォームの種類で確かめる。"""
+    for el in page.locator("iframe").element_handles():
+        frame = el.content_frame()
+        if frame is None:
+            continue
+        box = frame.locator("input[name=format_name]")
+        if box.count() and box.first.get_attribute("value") == format_name and frame.locator("#file_csv").count():
+            return frame
+    return None

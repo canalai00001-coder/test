@@ -15,6 +15,8 @@ from urllib.parse import urljoin
 
 from playwright.sync_api import Page, sync_playwright
 
+from . import site
+
 
 
 def _launch(p, headed: bool):
@@ -89,6 +91,12 @@ class Survey:
             return self.record(name, False, page, "ログインできませんでした（ID・パスワードを確かめてください）")
         return self.record(name, True, page)
 
+    def top(self, page: Page, top_url: str) -> None:
+        """トップを開き直し、お知らせの窓を（既読にしないで）隠す。"""
+        page.goto(top_url)
+        page.wait_for_load_state("networkidle")
+        site.hide_notice(page)
+
     def click_text(self, page: Page, text: str) -> bool:
         """ボタン・リンクのうち、名前がちょうど text のものを押す。無ければ文字を含むもの。
         （「『ファイル取出予約』機能について」のような説明のリンクを押さないように、ちょうど一致を先に見る）"""
@@ -115,6 +123,7 @@ class Survey:
                     return self.finish()
                 top_url = page.url
                 self.save("02_トップ", page)
+                site.hide_notice(page)
                 self.record("02_トップ", True, page)
                 top_links = _links(page)
                 self.step_import_dialog(page, top_url)
@@ -132,7 +141,7 @@ class Survey:
     def step_import_dialog(self, page: Page, top_url: str) -> None:
         name = "03_ファイル取込ダイアログ"
         try:
-            page.goto(top_url)
+            self.top(page, top_url)
             if not self.click_text(page, "ファイルを取込む"):
                 self.save(name, page)
                 self.record(name, False, page, "「ファイルを取込む」が見つかりませんでした")
@@ -155,24 +164,36 @@ class Survey:
         """「旧原稿形式CSV取込」（新原稿形式移行期間中CSV取込）のダイアログを開いて保存する。読むだけで、中のボタンは押さない。"""
         name = "03b_旧原稿形式CSV取込"
         try:
-            page.goto(top_url)
+            self.top(page, top_url)
+            site.show_section(page, "rec_recruitment_migration_slide")  # 「新原稿形式移行期間中CSV取込」の欄
             link = page.locator("a[href*='old_import']")
             if not link.count():
                 self.save(name, page)
                 self.record(name, False, page, "「旧原稿形式CSV取込」のリンクが見つかりませんでした")
                 return
             href = link.first.get_attribute("href") or ""
-            link.first.click()
+            how = "ダイアログ"
+            # 実物では欄を開いてもリンクが画面の外にあり、マウスでは押せなかった（2026-11-18）。入稿と同じく画面の上でクリックを起こす
+            site.open_old_import(page)
             page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(1500)
-            self.save(name, page)
-            inner = next((f for f in page.frames if "old_import" in f.url or "migration" in f.url), None)
+            inner = None
+            for _ in range(60):  # ダイアログの中身（iframe）が読み込まれるまで待つ（15秒まで）
+                inner = site.dialog_frame(page)
+                if inner is not None:
+                    break
+                page.wait_for_timeout(250)
             if inner is not None:
                 inner.wait_for_load_state()
+                inner.locator("#file_csv").wait_for(state="attached")
+                visible = inner.locator("a.btn_operation_btn02").first.is_visible()
+                how += "・取込予約のボタンが見える" if visible else "・取込予約のボタンが見えない"
+            self.save(name, page)
+            if inner is not None:
                 (self.out / f"{name}_中身.html").write_text(inner.content(), encoding="utf-8")
                 (self.out / f"{name}_中身_links.txt").write_text(
                     "\n".join(f"{x} → {h}" for x, h in _links(inner)), encoding="utf-8")
-            self.record(name, True, page, f"リンク {href}" + ("" if inner is not None else "（中身の iframe は見つかりませんでした）"))
+            self.record(name, True, page, f"リンク {href}（{how}）"
+                        + ("" if inner is not None else "（中身の iframe は見つかりませんでした）"))
             close = page.get_by_text("閉じる", exact=True)
             if close.count() and close.first.is_visible():
                 close.first.click()
@@ -182,7 +203,7 @@ class Survey:
     def step_jobs(self, page: Page, top_url: str) -> list:
         name = "04_募集管理"
         try:
-            page.goto(top_url)
+            self.top(page, top_url)
             if not self.click_text(page, "募集管理"):
                 self.save(name, page)
                 self.record(name, False, page, "「募集管理」が見つかりませんでした")
@@ -291,7 +312,7 @@ class Survey:
         """募集管理で sample（募集番号）を検索し、1件だけのときに「ファイル取出予約」して、取出ファイル一覧から CSV を落とす。"""
         name = "08_取り出し予約"
         try:
-            page.goto(top_url)
+            self.top(page, top_url)
             if not self.click_text(page, "募集管理"):
                 self.record(name, False, page, "「募集管理」が見つかりませんでした")
                 return
@@ -299,7 +320,7 @@ class Survey:
                 sample = self.pick_code(page)
                 if not sample:
                     return
-                page.goto(top_url)
+                self.top(page, top_url)
                 self.click_text(page, "募集管理")
             hits = self.search_code(page, sample)
             if hits != 1:

@@ -8,6 +8,13 @@
 詳細の「成功: N件」が CSV の件数と同じときだけ。2026-11-16 に1件取り込んだときの実物の行は
 「2026/11/16 16:49:33 | 2026/11/16 16:51:31 | 募集管理（新） | ….csv | 完了 | 成功: 1件 （8秒） | 2026/11/19」
 （待っているあいだは「待機中 | 実行までしばらくお待ち下さい」）。エラーのときの表示はまだ見ていない。
+
+旧フォーマット（109列。施策の旧FMT）は「旧原稿形式CSV取込」（rec_recruitment_migrations/old_import）から取り込む。
+2026-11-18 の画面調査で、中身は新フォーマットのダイアログと同じ作り（#file_csv・#duplicate_check_term・
+a.btn_operation_btn02 の queue_import()。送り先は rec_recruitment_csv_items/complete、format_name は hmgrfrm）。
+トップ（menu）の折りたたまれた欄の中のリンクは画面の外にあってマウスでは押せないので、画面の上でクリックを起こして
+サイトのダイアログを開く（ページを直接開くと、予約のあとの parent.location.reload() で送信がやり直されるおそれがあるため）。
+旧フォーマットを実際に取り込んで結果を見たことはまだない。
 """
 import re
 import time
@@ -75,15 +82,15 @@ class HitomaneUploader:
         page.wait_for_load_state("networkidle")
         return site.count(page)
 
-    def upload(self, files: list[Path]) -> list[UploadResult]:
-        """files を順に取り込む。1つ失敗したら、残りは取り込まない。"""
+    def upload(self, files: list[Path], old_format: bool = False) -> list[UploadResult]:
+        """files を順に取り込む。1つ失敗したら、残りは取り込まない。old_format なら旧原稿形式CSV取込から。"""
         self.out.mkdir(parents=True, exist_ok=True)
         results = []
         with sync_playwright() as p:
             browser, page = self._open(p)
             try:
                 for f in files:
-                    r = self._one(page, Path(f))
+                    r = self._one(page, Path(f), old_format)
                     results.append(r)
                     self.log(f"{'○' if r.ok else '×'} {Path(f).name}：{r.message}")
                     if not r.ok:
@@ -100,17 +107,23 @@ class HitomaneUploader:
             return ""
         return str(path)
 
-    def _one(self, page: Page, path: Path) -> UploadResult:
+    def _one(self, page: Page, path: Path, old_format: bool = False) -> UploadResult:
         label = path.stem
         try:
             page.goto(site.url(self.info, "csv_import_queues"))
             page.wait_for_load_state("networkidle")
             before = site.top_key(page)
 
-            page.goto(site.url(self.info, "rec_recruitments"))
-            page.wait_for_load_state("networkidle")
-            page.locator("a[href*='select_new_format']").first.click()
-            frame = self._dialog(page)
+            if old_format:
+                page.goto(site.url(self.info, "menu"))
+                page.wait_for_load_state("networkidle")
+                site.open_old_import(page)
+                frame = self._dialog(page, "old_import")
+            else:
+                page.goto(site.url(self.info, "rec_recruitments"))
+                page.wait_for_load_state("networkidle")
+                page.locator("a[href*='select_new_format']").first.click()
+                frame = self._dialog(page)
             frame.locator("#file_csv").set_input_files(str(path))
             box = frame.locator("#duplicate_check_term")
             if box.count() and box.is_checked():
@@ -134,14 +147,21 @@ class HitomaneUploader:
             return UploadResult(path.name, False, f"取込予約の操作中にエラー: {e}", "", self._shot(page, f"{label}_取込予約_エラー"))
         return self._wait(page, path, before, _rows(path))
 
-    def _dialog(self, page: Page):
-        """取込ダイアログの中身（iframe）。"""
+    def _dialog(self, page: Page, key: str = "select_new_format"):
+        """取込ダイアログの中身（iframe。URL に key が入っているもの）。"""
         deadline = time.time() + self.timeout_ms / 1000
         while time.time() < deadline:
-            frame = next((f for f in page.frames if "select_new_format" in f.url), None)
+            frame = next((f for f in page.frames if key in f.url), None)
+            if key == "old_import":  # 旧原稿形式は iframe の URL が old_import のままとは限らない。フォームの種類で探す
+                frame = site.dialog_frame(page, "hmgrfrm")
             if frame is not None:
                 frame.wait_for_load_state()
                 frame.locator("#file_csv").wait_for(state="attached")
+                want = "hmgrfrm" if key == "old_import" else "newhmgrfrm"
+                box = frame.locator("input[name=format_name]")
+                got = box.first.get_attribute("value") if box.count() else ""
+                if got != want:  # 旧と新のフォームを取り違えない（2026-11-18 の画面調査：旧 hmgrfrm・新 newhmgrfrm）
+                    raise RuntimeError(f"取込ダイアログの種類が違います（{got or '不明'}。{want} のはず）")
                 return frame
             page.wait_for_timeout(300)
         raise RuntimeError("取込ダイアログが開きませんでした")

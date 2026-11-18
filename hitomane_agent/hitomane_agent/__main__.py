@@ -257,9 +257,6 @@ def cmd_schedule(args) -> int:
                 text, ok = f"チェックが NG のため入稿しません（{datetime.now():%m/%d %H:%M}）{name}", False
             elif args.dry_run:
                 text, ok = f"テスト済み（{datetime.now():%m/%d %H:%M}）{len(ms.rows)}件・チェック {res['status']} {name}", True
-            elif ms.is_old_format:
-                text, ok = (f"旧FMT の原稿を作ってチェックしました（{datetime.now():%m/%d %H:%M}）{len(ms.rows)}件 {name}。"
-                            "ツールからの旧FMT の取り込みはまだできないため、入稿していません"), False
             else:
                 paths = workflow.write_csvs(ms, settings, rules)
                 code, text = _import(ms, infos[p.company], paths, settings, rules, args.headed, stop_over_limit=True)
@@ -392,7 +389,7 @@ def _import(ms, info, paths, settings, rules, headed=False, ask=None, stop_over_
     if ask is not None and not ask():
         print("中止しました")
         return 1, "中止しました"
-    results = up.upload(paths)
+    results = up.upload(paths, old_format=ms.is_old_format)
     workflow.record_upload(ms, results, key, info.get("company", ""))
     ok = bool(results) and all(r.ok for r in results) and len(results) == len(paths)
     for r in results:

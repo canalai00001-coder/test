@@ -184,21 +184,22 @@ class TestSchedule(unittest.TestCase):
         for p in shisaku_patches:
             p.start()
             self.addCleanup(p.stop)
-        # 旧FMT は作ってチェックするまで（入稿しない）
-        self.book.ws.table[1] = prow(prefix="CB1", 作り方="施策", フォーマット="旧FMT", 勤務地_都道府県="東京都")
-        code, out = self.cli("--yes", "--row", "2")
-        self.assertEqual(code, 2, out)
-        self.assertIn("ツールからの旧FMT の取り込みはまだできない", out)
-        self.assertEqual(FakeUploader.calls, [])
-        self.assertTrue(self.book.ws.cells[(2, RES)].startswith("❌旧FMT の原稿を作ってチェックしました"))
-        # 新FMT は入稿する。勤務地×職種名をこのパソコンの記録に残す
-        self.book.ws.table[1] = prow(prefix="CB1", 作り方="施策", 勤務地_都道府県="東京都")
+        FakeUploader.old_formats = []
+        # 旧FMT は旧原稿形式CSV取込から入稿する
+        self.book.ws.table[1] = prow(prefix="CB1", 作り方="施策", フォーマット="旧FMT", 勤務地_都道府県="東京都", count="1")
         code, out = self.cli("--yes", "--row", "2")
         self.assertEqual(code, 0, out)
-        self.assertEqual(len(FakeUploader.calls), 1)
+        self.assertEqual(FakeUploader.old_formats, [True])
+        self.assertIn("施策・旧FMT・東京都", out)
+        self.assertTrue(self.book.ws.cells[(2, RES)].startswith("入稿済み"))
+        # 新FMT。勤務地×職種名をこのパソコンの記録に残す（旧FMT の行で1つ使ったので、残りの1つ）
+        self.book.ws.table[1] = prow(prefix="CB2", 作り方="施策", 勤務地_都道府県="東京都", count="1")
+        code, out = self.cli("--yes", "--row", "2")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(FakeUploader.old_formats, [True, False])
         self.assertIn("施策・新FMT・東京都", out)
         base = plan.merge_shisaku_usage(s.shisaku_base())
-        # 原稿数 2 を東京都の勤務地（葛飾区だけ）に作ったので、職種名は2つとも使った
+        # 東京都の勤務地（葛飾区だけ）に1件ずつ2回作ったので、職種名は2つとも使った
         self.assertEqual(base.loc_used["canal benefits株式会社||東京都||葛飾区"], {"半導体の製造A", "半導体の製造B"})
 
     def test_problem_row_is_not_made(self):

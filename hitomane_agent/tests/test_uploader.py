@@ -18,9 +18,9 @@ class TestUploader(unittest.TestCase):
         self.csv = self.out / "up.csv"
         self.csv.write_bytes("募集番号,開始日\r\ntest0001,2026/11/17\r\n".encode("cp932"))
 
-    def up(self, files=None, **opts):
+    def up(self, files=None, old_format=False, **opts):
         u = HitomaneUploader(self.info, {**OPTS, **opts}, self.out, log=lambda *a: None)
-        return u.upload(files or [self.csv])
+        return u.upload(files or [self.csv], old_format=old_format)
 
     def test_total(self):
         self.st.total = 49990
@@ -36,6 +36,15 @@ class TestUploader(unittest.TestCase):
         self.assertEqual(self.st.imports[0]["file"], self.csv.read_bytes())
         self.assertFalse(self.st.imports[0]["dup"])  # 「上書きせずに取り込む」は外したまま
         self.assertTrue(Path(r.screenshot).exists())
+
+    def test_old_format(self):
+        r = self.up(old_format=True)[0]
+        self.assertTrue(r.ok, r.message)
+        self.assertEqual(self.st.imports[0]["file"], self.csv.read_bytes())
+        self.assertTrue(self.st.imports[0]["old"])  # 旧原稿形式CSV取込（complete）に送った
+        self.assertFalse(self.st.imports[0]["dup"])
+        self.assertFalse(self.up()[0].ok is False)  # 新フォーマットはこれまでどおり
+        self.assertFalse(self.st.imports[1]["old"])
 
     def test_unchecks_no_overwrite(self):
         self.st.dup_default = True

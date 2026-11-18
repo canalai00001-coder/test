@@ -40,7 +40,7 @@ class TestSurvey(Base):
         inner = (self.out / "03_ファイル取込ダイアログ_中身.html").read_text(encoding="utf-8")
         self.assertIn("既存原稿と同じ募集番号", inner)
         self.assertIn("type=\"file\"", inner)
-        self.assertIn("旧原稿形式のファイルを取り込む", (self.out / "03b_旧原稿形式CSV取込.html").read_text(encoding="utf-8"))
+        self.assertIn("（旧フォーマット）", (self.out / "03b_旧原稿形式CSV取込_中身.html").read_text(encoding="utf-8"))
 
     def test_wrong_password_stops(self):
         self.info["password"] = "ng"
