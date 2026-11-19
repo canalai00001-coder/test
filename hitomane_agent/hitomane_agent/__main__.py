@@ -605,6 +605,11 @@ def main(argv=None) -> int:
     s.add_argument("--company", help=COMPANY_HELP)
     s.set_defaults(func=cmd_takedown)
     args = ap.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):  # 画面（cp932）に出せない記号（▶ など）で止まらないように
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
     return args.func(args)
 
 
