@@ -514,7 +514,7 @@ def cmd_takedown(args) -> int:
         return 1
     out_dir = Path(prepared["files"][0]).parent
     results = HitomaneUploader(info, settings["hitomane"], out_dir, headed=args.headed).upload(
-        [Path(f) for f in prepared["files"]])
+        [Path(f) for f in prepared["files"]], register_work=False)  # もとからある原稿なのでお仕事番号は登録済み
     ok = len(results) == len(prepared["files"]) and all(r.ok for r in results)
     takedown.record({"account": key, "company": info.get("company", ""), "login_id": info["login_id"],
                      "conditions": cond.describe(), "rows": prepared["rows"], "ok": ok,

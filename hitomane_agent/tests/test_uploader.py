@@ -95,6 +95,52 @@ class TestUploader(unittest.TestCase):
         self.assertEqual(len(results), 1)  # 1つ目が失敗したら、残りは取り込まない
         self.assertEqual(len(self.st.imports), 1)
 
+    # ---- お仕事番号（原稿の前にお仕事情報管理へ取り込む。2026-11-19 の GritMate の失敗から）
+
+    def job_csv(self, branch="GritMate株式会社"):
+        f = self.out / "job.csv"
+        f.write_bytes(("募集番号,お仕事番号,拠点,開始日\r\n"
+                       f"T001,3-261119-1-1-8-1-2-製造(1)-青森県弘前市-GritMate株式会社,{branch},2026/11/19\r\n"
+                       f"T002,3-261119-1-1-8-1-2-製造(2)-岐阜県関市-GritMate株式会社,{branch},2026/11/19\r\n"
+                       f"T003,3-261119-1-1-8-1-2-製造(2)-岐阜県関市-GritMate株式会社,{branch},2026/11/19\r\n").encode("cp932"))
+        return f
+
+    def test_registers_work_numbers_first(self):
+        f = self.job_csv()
+        results = self.up([f])
+        self.assertTrue(results[0].ok, results[0].message)
+        self.assertEqual([bool(i.get("work")) for i in self.st.imports], [True, False])
+        work = self.st.imports[0]["file"].decode("cp932").split("\r\n")
+        self.assertTrue(work[0].startswith('"work_number","m_branch","recruitment_budget"'))
+        self.assertEqual(work[0].count(","), 26)  # 実物と同じ27列
+        self.assertEqual(work[1], '"3-261119-1-1-8-1-2-製造(1)-青森県弘前市-GritMate株式会社","GritMate株式会社"' + ',""' * 25)
+        self.assertEqual(len([x for x in work if x]), 3)  # 同じお仕事番号は1つ
+        self.assertEqual(self.st.imports[1]["file"], f.read_bytes())
+
+    def test_work_number_failure_stops_manuscript(self):
+        self.st.work_status = "エラー"
+        r = self.up([self.job_csv()])[0]
+        self.assertFalse(r.ok)
+        self.assertIn("お仕事番号の登録で止まりました", r.message)
+        self.assertEqual(len(self.st.imports), 1)  # 原稿は取り込んでいない
+
+    def test_work_number_needs_branch(self):
+        r = self.up([self.job_csv(branch="")])[0]
+        self.assertFalse(r.ok)
+        self.assertIn("拠点が空", r.message)
+        self.assertEqual(self.st.imports, [])
+
+    def test_no_work_registration(self):
+        u = HitomaneUploader(self.info, OPTS, self.out, log=lambda *a: None)
+        r = u.upload([self.job_csv()], register_work=False)[0]  # 取り下げ（もとからある原稿）
+        self.assertTrue(r.ok, r.message)
+        self.assertEqual([bool(i.get("work")) for i in self.st.imports], [False])
+
+    def test_old_format_registers_too(self):
+        r = self.up([self.job_csv()], old_format=True)[0]
+        self.assertTrue(r.ok, r.message)
+        self.assertEqual([(bool(i.get("work")), i["old"]) for i in self.st.imports], [(True, False), (False, True)])
+
     def test_password_not_written(self):
         self.up()
         for f in self.out.rglob("*"):

@@ -43,6 +43,8 @@ class State:
         self.branches = [("ダミーエリア", "B001", "-", "CB株式会社")]  # 拠点の一覧の行
         self.last_filter = None   # 最後の検索の条件（日付の検索）
         self.export_csv = None    # 取出予約したときの CSV（cp932）
+        self.work_status = None   # お仕事情報の取込の結果（None なら import_status と同じ）
+        self.work_detail = None
 
 
 JOBS = """<div class=title>検索</div>
@@ -154,6 +156,22 @@ def make_handler(st: State):
                                       "<a href=# class=btn_operation_btn02 onclick='queue_import();'>ファイル取込予約</a></form>"
                                       "<script>function queue_import() { if (confirm('ファイル取込予約を行いますか？')) "
                                       "document.getElementById('rec_form').submit(); }</script>")
+            if u.path == "/m66w/m_work_managements":
+                # 実物（2026-11-19）と同じく、「ファイル取込予約」は show_subwindow でダイアログ（iframe）を開く
+                return self.send(200, "お仕事情報管理<div>全56367件</div>"
+                                      "<a href=# class=btn_menu_btn08 onclick=\"show_subwindow('/m66w/m_work_managements/subwindow',"
+                                      "{reload:true});return false;\">ファイル取込予約</a><div id=dlg3></div>"
+                                      "<script>function show_subwindow(u){document.getElementById('dlg3').innerHTML="
+                                      "'<iframe class=cboxIframe src='+u+'></iframe>';}</script>")
+            if u.path == "/m66w/m_work_managements/subwindow":
+                return self.send(200, "取り込むファイルを選択して下さい"
+                                      "<form name=csvimport enctype=multipart/form-data action=/m66w/m_work_managements/csvimport "
+                                      "method=post><input id=file_csv name='file[csv]' type=file></form>"
+                                      "<a href=# class=btn_operation_btn02 onclick='queue_import();'>ファイル取込予約</a>"
+                                      "<script>function queue_import(){var fd=new FormData();"
+                                      "fd.append('file_csv',document.getElementById('file_csv').files[0]);"
+                                      "fetch('/m66w/m_work_managements/queue_import',{method:'POST',body:fd})"
+                                      ".then(function(){parent.location.reload();});}</script>")
             if u.path == "/m66w/rec_recruitments":
                 return self.send(200, JOBS.replace("{total}", str(st.total)))
             if u.path == "/m66w/rec_recruitments/edit/573038":
@@ -193,15 +211,17 @@ def make_handler(st: State):
                     finished = done or not last
                     # 実物は 待機中「実行までしばらくお待ち下さい」→ 進行中「0/1件」→ 完了「成功: 1件 （2秒）」
                     lines = len(list(csv.reader(io.StringIO(imp["file"].decode("cp932"), newline="")))) - 1
+                    work = imp.get("work")
                     if finished:
-                        status = st.import_status
-                        detail = st.import_detail if st.import_detail is not None else f"成功: {lines}件 （8秒）"
+                        status = (st.work_status if work and st.work_status else st.import_status)
+                        custom = st.work_detail if work else st.import_detail
+                        detail = custom if custom is not None else f"成功: {lines}件 （8秒）"
                     elif st.import_refreshes == 0:
                         status, detail = "待機中", "実行までしばらくお待ち下さい"
                     else:
                         status, detail = "進行中", f"0/{lines}件"
                     rows += (f"<tr class=record><td>2026/11/16 10:00:{n:02d}</td>"
-                             f"<td>{'2026/11/16 10:05:00' if finished else '-'}</td><td>募集管理（新）</td>"
+                             f"<td>{'2026/11/16 10:05:00' if finished else '-'}</td><td>{'お仕事情報管理' if work else '募集管理（新）'}</td>"
                              f"<td>upload_{n}.csv</td><td class=status-column>{status}</td><td>{detail}</td><td>2026/11/19</td></tr>")
                 empty = ("<tbody class=messages><tr><td colspan=7><p class=empty-message"
                          f"{' style=display:none' if rows else ''}>見つかりませんでした</p></td></tr></tbody>")
@@ -258,6 +278,13 @@ def make_handler(st: State):
                 st.import_refreshes = 0
                 # 実物は、予約するとダイアログが閉じて募集管理の画面が読み込み直される（iframe はなくなる）
                 return self.send(200, "ファイル取込予約を受け付けました<script>parent.location.reload();</script>")
+            if u.path == "/m66w/m_work_managements/queue_import":
+                boundary = re.search(r"boundary=(.+)", self.headers["Content-Type"]).group(1).encode()
+                part = next(p for p in raw.split(b"--" + boundary) if b'name="file_csv"' in p)
+                data = part.split(b"\r\n\r\n", 1)[1].rsplit(b"\r\n", 1)[0]
+                st.imports.append({"file": data, "dup": False, "old": False, "work": True})
+                st.import_refreshes = 0
+                return self.send(200, "{}", ctype="application/json")
             if u.path == "/m66w/import_reserve":
                 st.import_reserved = True
                 return self.send(200, "ok")

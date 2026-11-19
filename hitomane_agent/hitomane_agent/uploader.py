@@ -15,6 +15,11 @@ a.btn_operation_btn02 の queue_import()。送り先は rec_recruitment_csv_item
 トップ（menu）の折りたたまれた欄の中のリンクは画面の外にあってマウスでは押せないので、画面の上でクリックを起こして
 サイトのダイアログを開く（ページを直接開くと、予約のあとの parent.location.reload() で送信がやり直されるおそれがあるため）。
 旧フォーマットを実際に取り込んで結果を見たことはまだない。
+
+原稿の「お仕事番号」は、お仕事情報管理に登録してある番号でないと取り込めない（2026-11-19、GritMate で「お仕事番号が
+入力されていません」）。そのため、原稿を取り込む前に、その原稿のお仕事番号と拠点だけの CSV（work_numbers.py）を
+お仕事情報管理の「ファイル取込予約」（m_work_managements/subwindow。#file_csv と a.btn_operation_btn02）から取り込み、
+取込ファイル一覧で終わるのを待ってから原稿を取り込む。取り下げ（もとからある原稿を入れ直す）では登録しない。
 """
 import re
 import time
@@ -23,7 +28,7 @@ from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
 
-from . import site
+from . import site, work_numbers
 
 
 def _rows(path: Path) -> int | None:
@@ -82,15 +87,20 @@ class HitomaneUploader:
         page.wait_for_load_state("networkidle")
         return site.count(page)
 
-    def upload(self, files: list[Path], old_format: bool = False) -> list[UploadResult]:
-        """files を順に取り込む。1つ失敗したら、残りは取り込まない。old_format なら旧原稿形式CSV取込から。"""
+    def upload(self, files: list[Path], old_format: bool = False, register_work: bool = True) -> list[UploadResult]:
+        """files を順に取り込む。1つ失敗したら、残りは取り込まない。old_format なら旧原稿形式CSV取込から。
+        register_work なら、それぞれの原稿の前にお仕事番号をお仕事情報管理へ取り込む（失敗したら原稿は取り込まない）。"""
         self.out.mkdir(parents=True, exist_ok=True)
         results = []
         with sync_playwright() as p:
             browser, page = self._open(p)
             try:
                 for f in files:
-                    r = self._one(page, Path(f), old_format)
+                    r = self._work(page, Path(f)) if register_work else None
+                    if r is None or r.ok:
+                        if r is not None:
+                            self.log(f"○ お仕事番号の登録：{r.message}")
+                        r = self._one(page, Path(f), old_format)
                     results.append(r)
                     self.log(f"{'○' if r.ok else '×'} {Path(f).name}：{r.message}")
                     if not r.ok:
@@ -146,6 +156,72 @@ class HitomaneUploader:
         except Exception as e:
             return UploadResult(path.name, False, f"取込予約の操作中にエラー: {e}", "", self._shot(page, f"{label}_取込予約_エラー"))
         return self._wait(page, path, before, _rows(path))
+
+    def _work(self, page: Page, path: Path) -> UploadResult | None:
+        """原稿のお仕事番号を、お仕事情報管理に取り込む。お仕事番号の列が無い・空のときは None（何もしない）。"""
+        from .csv_export import read_csv
+        try:
+            items = work_numbers.pairs(read_csv(path.read_bytes(), path.stem))
+        except Exception as e:
+            return UploadResult(path.name, False, f"お仕事番号を読めませんでした: {e}")
+        if not items:
+            return None
+        why = work_numbers.problem(items)
+        if why:
+            return UploadResult(path.name, False, why)
+        work = self.out / f"{path.stem}_お仕事番号.csv"
+        work.write_bytes(work_numbers.to_csv_bytes(items))
+        label = work.stem
+        try:
+            page.goto(site.url(self.info, "csv_import_queues"))
+            page.wait_for_load_state("networkidle")
+            before = site.top_key(page)
+            page.goto(site.url(self.info, "m_work_managements"))
+            page.wait_for_load_state("networkidle")
+            site.hide_notice(page)
+            page.locator("a[onclick*='m_work_managements/subwindow']").first.click()
+            frame = self._work_dialog(page)
+            frame.locator("#file_csv").set_input_files(str(work))
+            messages = []
+
+            def answer(d):
+                messages.append(d.message)
+                d.accept()
+            page.on("dialog", answer)
+            try:
+                frame.locator("a.btn_operation_btn02").first.click()
+                page.wait_for_timeout(2000)
+                page.wait_for_load_state("networkidle")
+            finally:
+                page.remove_listener("dialog", answer)
+            self._shot(page, f"{label}_取込予約")
+            (self.out / f"{label}_取込予約.txt").write_text("確認ダイアログ: " + " / ".join(messages), encoding="utf-8")
+        except Exception as e:
+            r = UploadResult(work.name, False, f"お仕事番号の取込予約の操作中にエラー: {e}", "", self._shot(page, f"{label}_取込予約_エラー"))
+            self.log(f"× {work.name}：{r.message}")
+            return r
+        r = self._wait(page, work, before, len(items))
+        if not r.ok:
+            self.log(f"× {work.name}：{r.message}")
+            r.message = "お仕事番号の登録で止まりました（原稿は取り込んでいません）：" + r.message
+        return r
+
+    def _work_dialog(self, page: Page):
+        """お仕事情報管理の取込ダイアログ（iframe。form[name=csvimport] の送り先が m_work_managements のもの）。"""
+        deadline = time.time() + self.timeout_ms / 1000
+        while time.time() < deadline:
+            for f in page.frames:
+                if "m_work_managements/subwindow" not in f.url:
+                    continue
+                try:
+                    form = f.locator("form[name=csvimport]")
+                    action = form.first.get_attribute("action") if form.count() else ""
+                    if "m_work_managements" in (action or "") and f.locator("#file_csv").count():
+                        return f
+                except Exception:
+                    pass
+            page.wait_for_timeout(300)
+        raise RuntimeError("お仕事情報管理の取込ダイアログが開きませんでした")
 
     def _dialog(self, page: Page, key: str = "select_new_format"):
         """取込ダイアログの中身（iframe。URL に key が入っているもの）。"""
