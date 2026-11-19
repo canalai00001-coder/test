@@ -2,7 +2,7 @@
 // 入稿予定表（hitomane_agent が使うシート）のプルダウンを、その行で選んだ値に合わせて付け直す。
 // ＜ヒトマネ/施策用＞の土台の onEdit と同じ動き：
 //   職種・分類を選ぶ → 「職種名指定」をその職種（6重め/7軽めは分類。空欄なら4つ全部）の職種名にする
-//   職種で6重め/7軽めを選ぶ → 「職種名選択」をその職種の職種名にする（ほかの職種ではプルダウンを外す）
+//   職種を選ぶ → 「職種名選択」（通常の作り方）をその職種の職種名にする
 //   勤務地_都道府県を選ぶ → 「勤務地_市区町村」をその県の市区町村にする
 // 候補は hitomane_agent が作る隠しシートの「<列名>｜<キー>」の列にある（plan.py の list_key と同じ決め方）。
 // 選び直して候補から外れた値は消す（候補に残っている値はそのまま）。
@@ -18,7 +18,7 @@ function hmPlanHeaderName_(h) {
 function hmPlanListKey_(kind, cat, bunrui, pref) {
   const heavy = HM_PLAN_HEAVY_LIGHT.indexOf(cat) >= 0;
   if (kind === '職種名指定' && cat) return heavy ? `${kind}｜${cat}｜${bunrui || '4つ全部'}` : `${kind}｜${cat}`;
-  if (kind === '職種名選択' && heavy) return `${kind}｜${cat}`;
+  if (kind === '職種名選択' && cat) return `${kind}｜${cat}`;
   if (kind === '勤務地_市区町村' && pref) return `${kind}｜${pref}`;
   return '';
 }

@@ -577,7 +577,7 @@ def generate_batch(bank: Bank, t: Target, entry_prefix: str, title_start: int, u
     fixed_letter = ""
     if paired:
         if not t.paired_title:
-            raise GenerateError(f"カテゴリ「{t.category}」は「職種名選択(6重め/7軽めのみ・必須)」列で職種名を選択してください")
+            raise GenerateError(f"カテゴリ「{t.category}」は「職種名選択」列で職種名を選択してください")
         sel = t.paired_title.split("｜", 1)[1] if "｜" in t.paired_title else t.paired_title
         entry = next((e for e in bank.paired_job_data[content_category] if e["title"] == sel), None)
         if entry is None:
@@ -593,14 +593,22 @@ def generate_batch(bank: Bank, t: Target, entry_prefix: str, title_start: int, u
         contents = bank.job_contents.get(content_category) or []
         if not contents:
             raise GenerateError(f"カテゴリ「{content_category}」の仕事内容が見つかりません")
-        recent, last = recently_used(t.company, t.category, usage, now)
-        ever = ever_used(t.company, t.category, usage)
-        if all(x in ever for x in all_titles):
-            raise GenerateError(f"「{t.company}」の「{t.category}」職種名(全{len(all_titles)}件)を全て使い切りました。"
-                                "職種名シートに新しい職種名を追加してください。")
-        titles = [x for x in all_titles if x not in recent] or list(all_titles)
-        # 一度も使っていない職種名が先、そのあとは直近使用日の古い順（Array.sort は安定ソート）
-        titles.sort(key=lambda x: (x in ever, last[x].timestamp() if last.get(x) else 0))
+        if t.paired_title:
+            # 入稿予定表の「職種名選択」で選んだ職種名だけを使う（GAS には無い。使ったことがあれば、6重め/7軽めと同じく
+            # run() の重複警告で止める）
+            sel = (t.paired_title.split("｜", 1)[1] if "｜" in t.paired_title else t.paired_title).strip()
+            if sel not in all_titles:
+                raise GenerateError(f"「{sel}」が「{t.category}」の職種名一覧に見つかりません")
+            titles = [sel]
+        else:
+            recent, last = recently_used(t.company, t.category, usage, now)
+            ever = ever_used(t.company, t.category, usage)
+            if all(x in ever for x in all_titles):
+                raise GenerateError(f"「{t.company}」の「{t.category}」職種名(全{len(all_titles)}件)を全て使い切りました。"
+                                    "職種名シートに新しい職種名を追加してください。")
+            titles = [x for x in all_titles if x not in recent] or list(all_titles)
+            # 一度も使っていない職種名が先、そのあとは直近使用日の古い順（Array.sort は安定ソート）
+            titles.sort(key=lambda x: (x in ever, last[x].timestamp() if last.get(x) else 0))
 
     company = bank.companies.get(t.company)
     if company is None:
@@ -769,7 +777,8 @@ def run(bank: Bank, usage: Usage, targets: list[Target], only_groups: set | None
                     except GenerateError as e:
                         raise GenerateError(where + str(e)) from None
                     content_category = _content_category(t.category)
-                    if bank.paired_job_data.get(content_category):  # 6重め/7軽めだけ、全期間の使用履歴と照らす
+                    # 6重め/7軽めと、職種名を選んだ行は、全期間の使用履歴と照らす
+                    if bank.paired_job_data.get(content_category) or t.paired_title:
                         dup = [x for x in b.title_counts if x in ever_used(t.company, t.category, usage)]
                         if dup:
                             raise GenerateError(where + f"重複警告: {'、'.join(dup)}は使用履歴に存在しています。")

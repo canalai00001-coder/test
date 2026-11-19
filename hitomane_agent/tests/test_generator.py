@@ -115,6 +115,17 @@ class TestGenerate(unittest.TestCase):
         self.assertEqual(len(res), 1)  # GAS と同じく、エラーのところで止まる
         self.assertEqual(res[0].error, "行4: 重複警告: グラスの検品は使用履歴に存在しています。")
 
+    def test_chosen_title_in_other_category(self):
+        # 入稿予定表の「職種名選択」は6重め/7軽め以外でも選べる（選んだ職種名だけを使う）
+        res = run([s.plan_row("1-1", count="3", prefix="CB1", paired="5半導体｜半導体の製造B")])[0]
+        self.assertEqual(res.error, "")
+        self.assertTrue(all("半導体の製造B" in r["募集職種"] for r in res.rows))
+        self.assertIn("「無い職種」が「5半導体」の職種名一覧に見つかりません",
+                      run([s.plan_row("1-1", prefix="CB1", paired="無い職種")])[0].error)
+        used = s.usage([["canal benefits株式会社", "5半導体", "半導体の製造B", "1", "1", "2025-01-01 10:00"]])
+        res = run([s.plan_row("1-1", prefix="CB1", paired="5半導体｜半導体の製造B")], usage=used)[0]
+        self.assertIn("重複警告: 半導体の製造Bは使用履歴に存在しています", res.error)
+
     def test_input_errors(self):
         self.assertEqual(run([s.plan_row("1-1")])[0].error,
                          "行4: 募集番号の先頭が空です(この会社で最初の予約行は必須入力です)")

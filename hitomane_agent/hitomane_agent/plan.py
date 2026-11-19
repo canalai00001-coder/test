@@ -27,7 +27,7 @@ LIST_SHEET = "_入稿予定表_プルダウン（自動生成・編集不要）"
 HEADERS = ["実行日", "会社", "職種", "夜勤有無", "通勤/入寮", "雇用形態", "入稿ステータス",
            "作り方\n(空欄=通常)", "フォーマット\n(空欄=新FMT)",
            "原稿数\n(空欄=勤務地の数)", "画像カテゴリー", "給与パターン\n(空欄=基本)",
-           "職種名選択\n(通常の6重め/7軽めのみ・必須)",
+           "職種名選択\n(通常のみ・6重め/7軽めは必須・ほかは空欄=自動)",
            "職種名指定\n(施策のみ・空欄=ランダム)", "分類\n(施策の6重め/7軽めのみ・必須)",
            "勤務地_都道府県\n(施策のみ・空欄=全勤務地)", "勤務地_市区町村\n(施策のみ・空欄=県内すべて)",
            "タイトル末尾ワード\n(空欄=タイトルシートの値)",
@@ -253,7 +253,7 @@ def list_key(kind: str, values: dict) -> str:
     cat, bunrui, pref = values.get("職種", ""), values.get("分類", ""), values.get("勤務地_都道府県", "")
     if kind == "職種名指定" and cat:
         return f"{kind}｜{cat}｜{bunrui or '4つ全部'}" if cat in HEAVY_LIGHT else f"{kind}｜{cat}"
-    if kind == "職種名選択" and cat in HEAVY_LIGHT:
+    if kind == "職種名選択" and cat:
         return f"{kind}｜{cat}"
     if kind == "勤務地_市区町村" and pref:
         return f"{kind}｜{pref}"
@@ -266,6 +266,9 @@ def dependent_lists(bank: generator.Bank, sbase=None, bunrui_read=None) -> list[
     for c in ("重め", "軽め"):
         label = generator.CATEGORY_NUMBER_LABEL[c]
         out.append((f"職種名選択｜{label}", [f"{label}｜{e['title']}" for e in bank.paired_job_data.get(c, [])]))
+    for cat, titles in bank.job_titles.items():  # 通常の作り方の職種名（6重め/7軽め以外）
+        if cat not in HEAVY_LIGHT:
+            out.append((f"職種名選択｜{cat}", list(dict.fromkeys(str(t).strip() for t in titles if str(t).strip()))))
     if sbase is not None:
         for cat, titles in sbase.bank.job_titles.items():
             if cat not in HEAVY_LIGHT:

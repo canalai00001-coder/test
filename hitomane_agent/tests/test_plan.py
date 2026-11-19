@@ -299,7 +299,8 @@ class TestDependentDropdowns(unittest.TestCase):
         self.assertEqual(k("職種名指定", {"職種": "5半導体"}), "職種名指定｜5半導体")
         self.assertEqual(k("職種名指定", {"職種": "6重め", "分類": "手のひら"}), "職種名指定｜6重め｜手のひら")
         self.assertEqual(k("職種名指定", {"職種": "7軽め"}), "職種名指定｜7軽め｜4つ全部")
-        self.assertEqual(k("職種名選択", {"職種": "5半導体"}), "")
+        self.assertEqual(k("職種名選択", {"職種": "5半導体"}), "職種名選択｜5半導体")
+        self.assertEqual(k("職種名選択", {}), "")
         self.assertEqual(k("職種名選択", {"職種": "6重め"}), "職種名選択｜6重め")
         self.assertEqual(k("勤務地_市区町村", {"勤務地_都道府県": "大阪府"}), "勤務地_市区町村｜大阪府")
         self.assertEqual(k("勤務地_市区町村", {}), "")
@@ -312,6 +313,7 @@ class TestDependentDropdowns(unittest.TestCase):
         self.assertNotIn("職種名指定｜7軽め｜重労働", lists)  # 空のシートは候補なし
         self.assertNotIn("職種名指定｜6重め｜4つ全部", lists)  # 分類ブックに無い
         self.assertIn("池田市", lists["勤務地_市区町村｜大阪府"])
+        self.assertEqual(lists["職種名選択｜5半導体"], ["半導体の製造A", "半導体の製造B"])
 
     def test_setup_sheet(self):
         head = [plan.header_name(h) for h in plan.HEADERS]
@@ -334,9 +336,10 @@ class TestDependentDropdowns(unittest.TestCase):
         self.assertEqual(ranges("職種名指定"), [(1, None), (1, f"={q}!{cols['職種名指定｜7軽め｜手のひら']}2:{cols['職種名指定｜7軽め｜手のひら']}3"),
                                              (2, f"={q}!{cols['職種名指定｜5半導体']}2:{cols['職種名指定｜5半導体']}3")])
         c, n = cols["職種名選択｜7軽め"], len(g.build_bank(s.grids()).paired_job_data["軽め"])
-        self.assertEqual(ranges("職種名選択"), [(1, None), (1, f"={q}!{c}2:{c}{n + 1}")])  # 5半導体の行は外したまま
+        c2 = cols["職種名選択｜5半導体"]
+        self.assertEqual(ranges("職種名選択"), [(1, None), (1, f"={q}!{c}2:{c}{n + 1}"), (2, f"={q}!{c2}2:{c2}3")])
         self.assertEqual([x for x, _ in ranges("勤務地_市区町村")], [1, 1])
-        self.assertIn("入っている行の 4か所", lines[-1])
+        self.assertIn("入っている行の 5か所", lines[-1])
 
 
 def _col_letter(i):
