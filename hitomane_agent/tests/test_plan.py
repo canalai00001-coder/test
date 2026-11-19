@@ -247,5 +247,101 @@ class TestScreen(unittest.TestCase):
                          ["schedule", "--yes", "--row", "5", "--dry-run"])
 
 
+class SetupWs:
+    def __init__(self, title, table, sid):
+        self.title, self.table, self.id = title, table, sid
+        self.row_count, self.col_count = 1000, 30
+
+    def get_all_values(self):
+        return self.table
+
+    def row_values(self, n):
+        return self.table[n - 1] if n <= len(self.table) else []
+
+    def update(self, range_name, values):
+        assert range_name == "A1"
+        self.table = [list(r) for r in values]
+
+    def clear(self):
+        self.table = []
+
+    def add_rows(self, n):
+        self.row_count += n
+
+    def add_cols(self, n):
+        self.col_count += n
+
+
+class SetupBook:
+    def __init__(self, table):
+        self.sheets = {plan.SHEET: SetupWs(plan.SHEET, table, 1)}
+        self.requests = []
+
+    def worksheets(self):
+        return list(self.sheets.values())
+
+    def worksheet(self, name):
+        return self.sheets[name]
+
+    def add_worksheet(self, name, rows, cols):
+        self.sheets[name] = SetupWs(name, [], len(self.sheets) + 1)
+        return self.sheets[name]
+
+    def batch_update(self, body):
+        self.requests += body["requests"]
+
+
+class TestDependentDropdowns(unittest.TestCase):
+    """職種・分類・都道府県を選ぶと、右の職種名指定などのプルダウンが変わる（元の施策の土台の onEdit と同じ）。"""
+
+    def test_list_key(self):
+        k = plan.list_key
+        self.assertEqual(k("職種名指定", {"職種": "5半導体"}), "職種名指定｜5半導体")
+        self.assertEqual(k("職種名指定", {"職種": "6重め", "分類": "手のひら"}), "職種名指定｜6重め｜手のひら")
+        self.assertEqual(k("職種名指定", {"職種": "7軽め"}), "職種名指定｜7軽め｜4つ全部")
+        self.assertEqual(k("職種名選択", {"職種": "5半導体"}), "")
+        self.assertEqual(k("職種名選択", {"職種": "6重め"}), "職種名選択｜6重め")
+        self.assertEqual(k("勤務地_市区町村", {"勤務地_都道府県": "大阪府"}), "勤務地_市区町村｜大阪府")
+        self.assertEqual(k("勤務地_市区町村", {}), "")
+
+    def test_lists(self):
+        lists = dict(plan.dependent_lists(g.build_bank(s.grids()), s.shisaku_base(), s.bunrui_reader))
+        self.assertEqual(lists["職種名指定｜5半導体"], ["半導体の製造A", "半導体の製造B"])
+        self.assertEqual(lists["職種名指定｜7軽め｜手のひら"], ["グラスの検品", "メガネケースの検査"])
+        self.assertEqual(lists["職種名指定｜7軽め｜4つ全部"], ["グラスの検品", "メガネケースの検査", "倉庫の仕分け"])
+        self.assertNotIn("職種名指定｜7軽め｜重労働", lists)  # 空のシートは候補なし
+        self.assertNotIn("職種名指定｜6重め｜4つ全部", lists)  # 分類ブックに無い
+        self.assertIn("池田市", lists["勤務地_市区町村｜大阪府"])
+
+    def test_setup_sheet(self):
+        head = [plan.header_name(h) for h in plan.HEADERS]
+        row = dict.fromkeys(head, "")
+        r1 = {**row, "会社": "canal benefits株式会社", "職種": "7軽め", "分類": "手のひら", "勤務地_都道府県": "大阪府"}
+        r2 = {**row, "会社": "canal benefits株式会社", "職種": "5半導体"}
+        book = SetupBook([plan.HEADERS, [r1[h] for h in head], [r2[h] for h in head]])
+        lines = plan.setup_sheet(book, g.build_bank(s.grids()), s.shisaku_base(), s.bunrui_reader)
+        lst = book.sheets[plan.LIST_SHEET].table
+        cols = {n: _col_letter(i) for i, n in enumerate(lst[0])}
+
+        def ranges(kind):
+            c = head.index(kind)
+            return [(rq["setDataValidation"]["range"]["startRowIndex"],
+                     rq["setDataValidation"].get("rule", {}).get("condition", {}).get("values", [{}])[0].get("userEnteredValue"))
+                    for rq in book.requests if "setDataValidation" in rq
+                    and rq["setDataValidation"]["range"]["startColumnIndex"] == c]
+
+        q = "'" + plan.LIST_SHEET + "'"
+        self.assertEqual(ranges("職種名指定"), [(1, None), (1, f"={q}!{cols['職種名指定｜7軽め｜手のひら']}2:{cols['職種名指定｜7軽め｜手のひら']}3"),
+                                             (2, f"={q}!{cols['職種名指定｜5半導体']}2:{cols['職種名指定｜5半導体']}3")])
+        c, n = cols["職種名選択｜7軽め"], len(g.build_bank(s.grids()).paired_job_data["軽め"])
+        self.assertEqual(ranges("職種名選択"), [(1, None), (1, f"={q}!{c}2:{c}{n + 1}")])  # 5半導体の行は外したまま
+        self.assertEqual([x for x, _ in ranges("勤務地_市区町村")], [1, 1])
+        self.assertIn("入っている行の 4か所", lines[-1])
+
+
+def _col_letter(i):
+    return plan._col(i + 1)
+
+
 if __name__ == "__main__":
     unittest.main()

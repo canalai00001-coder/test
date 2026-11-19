@@ -4,6 +4,7 @@
 スクリプト ID：`1vfEfYrDHk0VLdkqrTmvc40zX4zX0wyvGkcyqL60rJOtzNA6IB0aVh0NC`
 
 - `コード.js`：メニュー「ヒトマネ自動生成」の①〜⑥（③予約リストを一括実行・⑤検品シートを作成 など）
+- `入稿予定表.js`：入稿予定表で職種・分類・都道府県を選んだとき、右のプルダウンを付け直す（2026-11-19 にツール側から追加。`コード.js` の onEdit の最初で呼ぶ）
 - `appsscript.json`：プロジェクトの設定
 
 ツールの原稿の生成（`hitomane_agent/generator.py`）は、この `コード.js` の③の新FMT の部分（hmBuildContentBank_・hmGenerateBatchNewFmt_・

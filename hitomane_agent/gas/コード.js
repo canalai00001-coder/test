@@ -790,6 +790,7 @@ const HM_CONFIG_PAIRED_TITLE_COL = 14;
 
 function onEdit(e) {
   try {
+    if (hmPlanOnEdit_(e)) return; // 入稿予定表（入稿予定表.js）
     const range = e.range;
     const sheet = range.getSheet();
     if (sheet.getName() !== HM_CONFIG_SHEET_NAME) return;

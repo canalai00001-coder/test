@@ -182,7 +182,16 @@ def cmd_plan_sheet(args) -> int:
     settings = _settings(args)
     base, ai = _books(settings)
     grids, _ = generator.load_base(base)
-    for line in plan.setup_sheet(ai, generator.build_bank(grids)):
+    sbase = reader = None
+    try:  # 職種名指定・市区町村の候補は施策の土台、6重め/7軽めは分類ブックから
+        from . import shisaku
+        book, reader, why = _shisaku_books(settings, need_bunrui=True)
+        sbase = shisaku.load_base(book)
+        if why:
+            print(why)
+    except Exception as e:
+        print(f"施策の土台を読めませんでした：{e}")
+    for line in plan.setup_sheet(ai, generator.build_bank(grids), sbase, reader):
         print(line)
     return 0
 

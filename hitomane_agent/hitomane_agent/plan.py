@@ -242,10 +242,55 @@ def _q(name: str) -> str:
     return "'" + name.replace("'", "''") + "'"
 
 
-def setup_sheet(book, bank: generator.Bank) -> list[str]:
+# 選んだ値で中身が変わるプルダウン（元の施策の土台の onEdit と同じ動き）。シートで選び直したときは、【AI用】の GAS
+# （hitomane_agent/gas/入稿予定表.js）が付け直す。候補は隠しシートの「<列名>｜<キー>」の列に置く。
+DEPENDENT = ("職種名指定", "職種名選択", "勤務地_市区町村")
+HEAVY_LIGHT = tuple(generator.CATEGORY_NUMBER_LABEL[c] for c in ("重め", "軽め"))
+
+
+def list_key(kind: str, values: dict) -> str:
+    """その行の「職種名指定」などの候補を置いた列の名前（候補が無いときは ""）。GAS の hmPlanListKey_ と同じ。"""
+    cat, bunrui, pref = values.get("職種", ""), values.get("分類", ""), values.get("勤務地_都道府県", "")
+    if kind == "職種名指定" and cat:
+        return f"{kind}｜{cat}｜{bunrui or '4つ全部'}" if cat in HEAVY_LIGHT else f"{kind}｜{cat}"
+    if kind == "職種名選択" and cat in HEAVY_LIGHT:
+        return f"{kind}｜{cat}"
+    if kind == "勤務地_市区町村" and pref:
+        return f"{kind}｜{pref}"
+    return ""
+
+
+def dependent_lists(bank: generator.Bank, sbase=None, bunrui_read=None) -> list[tuple[str, list]]:
+    """選んだ値ごとの候補。職種名指定・市区町村は施策の土台（sbase）から、6重め/7軽めの職種名指定は分類ブックから。"""
+    out = []
+    for c in ("重め", "軽め"):
+        label = generator.CATEGORY_NUMBER_LABEL[c]
+        out.append((f"職種名選択｜{label}", [f"{label}｜{e['title']}" for e in bank.paired_job_data.get(c, [])]))
+    if sbase is not None:
+        for cat, titles in sbase.bank.job_titles.items():
+            if cat not in HEAVY_LIGHT:
+                out.append((f"職種名指定｜{cat}", list(dict.fromkeys(str(t).strip() for t in titles if str(t).strip()))))
+    if bunrui_read is not None:
+        cache = {}
+        for c in ("重め", "軽め"):
+            for opt in shisaku.BUNRUI_OPTIONS:
+                try:
+                    pool = shisaku.bunrui_pool(c, opt, bunrui_read, cache)
+                except generator.GenerateError:
+                    pool = []
+                out.append((f"職種名指定｜{generator.CATEGORY_NUMBER_LABEL[c]}｜{opt}", [e["title"] for e in pool]))
+    locs = (sbase.bank if sbase is not None else bank).locations
+    for pref in dict.fromkeys(x["pref"] for x in locs):
+        out.append((f"勤務地_市区町村｜{pref}", list(dict.fromkeys(x["city"] for x in locs if x["pref"] == pref and x["city"]))))
+    return [(n, v) for n, v in out if v]
+
+
+def setup_sheet(book, bank: generator.Bank, sbase=None, bunrui_read=None) -> list[str]:
     """入稿予定表が無ければ作り、見出し・プルダウン・1行目の固定を整える。入っている予定は消さない。
 
-    プルダウンの候補（会社・職種・画像カテゴリー・職種名選択）は、土台から作った隠しシートに置いて参照する。
+    プルダウンの候補は、土台から作った隠しシートに置いて参照する。職種名指定・職種名選択・勤務地_市区町村は、
+    その行の職種・分類・都道府県に合わせた候補にする（シートで選び直したときは【AI用】の GAS が付け直す）。
+    sbase は施策の土台（shisaku.Base）、bunrui_read は分類ブックの読み方。無ければその候補は付けない。
     戻り値は行ったことの説明。"""
     done_list = []
     names = [ws.title for ws in book.worksheets()]
@@ -265,7 +310,8 @@ def setup_sheet(book, bank: generator.Bank) -> list[str]:
                 ws.add_cols(len(head) + len(add) - ws.col_count)
             ws.update(range_name=f"{_col(len(head) + 1)}1", values=[add])
             done_list.append(f"足りない列を右に足しました：{'、'.join(header_name(h) for h in add)}")
-    head = [header_name(h) for h in ws.row_values(1)]
+    table = ws.get_all_values() or [[]]
+    head = [header_name(h) for h in table[0]]
     rows = max(ws.row_count, 1000)
 
     companies = list(bank.companies)
@@ -273,36 +319,43 @@ def setup_sheet(book, bank: generator.Bank) -> list[str]:
     categories = [generator.CATEGORY_NUMBER_LABEL[c] for c in generator.CATEGORY_NAMES
                   if bank.job_titles.get(generator.CATEGORY_NUMBER_LABEL[c]) or bank.paired_job_data.get(c)
                   or c in ("重め", "軽め")]
-    prefs = list(dict.fromkeys(loc["pref"] for loc in bank.locations))
+    locs = bank.locations + (sbase.bank.locations if sbase is not None else [])
+    prefs = list(dict.fromkeys(loc["pref"] for loc in locs))
     images = list(bank.images_by_category)
-    titles = [f"{generator.CATEGORY_NUMBER_LABEL[c]}｜{e['title']}" for c in ("重め", "軽め")
-              for e in bank.paired_job_data.get(c, [])]
-    lists = [("会社", companies), ("職種", categories), ("画像カテゴリー", images), ("職種名選択", titles),
-             ("勤務地_都道府県", prefs)]
+    lists = [("会社", companies), ("職種", categories), ("画像カテゴリー", images), ("勤務地_都道府県", prefs)]
+    depend = dependent_lists(bank, sbase, bunrui_read)
+    all_lists = lists + depend
     if LIST_SHEET in names:
         lst = book.worksheet(LIST_SHEET)
         lst.clear()
     else:
-        lst = book.add_worksheet(LIST_SHEET, rows=max(len(x) for _, x in lists) + 10, cols=len(lists))
-    need = max(len(x) for _, x in lists) + 1
+        lst = book.add_worksheet(LIST_SHEET, rows=10, cols=len(all_lists))
+    need = max(len(x) for _, x in all_lists) + 1
     if lst.row_count < need:
         lst.add_rows(need - lst.row_count)
-    table = [[n for n, _ in lists]] + [[(x[i] if i < len(x) else "") for _, x in lists] for i in range(need - 1)]
-    lst.update(range_name="A1", values=table)
+    if lst.col_count < len(all_lists):
+        lst.add_cols(len(all_lists) - lst.col_count)
+    lst.update(range_name="A1", values=[[n for n, _ in all_lists]]
+               + [[(x[i] if i < len(x) else "") for _, x in all_lists] for i in range(need - 1)])
+    place = {n: (i, len(v)) for i, (n, v) in enumerate(all_lists)}
 
-    def cell_range(col_name):
+    def cell_range(col_name, r0=1, r1=None):
         if col_name not in head:
             return None
         c = head.index(col_name)
-        return {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": rows, "startColumnIndex": c, "endColumnIndex": c + 1}
+        return {"sheetId": ws.id, "startRowIndex": r0, "endRowIndex": r1 or rows, "startColumnIndex": c,
+                "endColumnIndex": c + 1}
 
-    def rule(col_name, condition, strict=False):
-        return {"setDataValidation": {"range": cell_range(col_name), "rule": {
+    def rule(col_name, condition, strict=False, r0=1, r1=None):
+        return {"setDataValidation": {"range": cell_range(col_name, r0, r1), "rule": {
             "condition": condition, "showCustomUi": True, "strict": strict}}}
 
     one_of = lambda vals: {"type": "ONE_OF_LIST", "values": [{"userEnteredValue": v} for v in vals]}
-    in_list = lambda i, n: {"type": "ONE_OF_RANGE",
-                            "values": [{"userEnteredValue": f"={_q(LIST_SHEET)}!{_col(i + 1)}2:{_col(i + 1)}{n + 1}"}]}
+
+    def in_list(name):
+        i, n = place[name]
+        return {"type": "ONE_OF_RANGE",
+                "values": [{"userEnteredValue": f"={_q(LIST_SHEET)}!{_col(i + 1)}2:{_col(i + 1)}{n + 1}"}]}
     reqs = [rule("実行日", {"type": "DATE_IS_VALID"}),
             rule("夜勤有無", {"type": "BOOLEAN"}),
             rule("通勤/入寮", one_of(["通勤", "入寮"])),
@@ -314,9 +367,22 @@ def setup_sheet(book, bank: generator.Bank) -> list[str]:
             # 「25万」などは施策の作り方だけ
             rule("給与パターン", one_of([p for p in ("基本", "高額", "低額") if p in bank.salary_patterns]
                                     + shisaku.SALARY_MAN_OPTIONS))]
-    for i, (n, vals) in enumerate(lists):
+    for n, vals in lists:
         if vals:
-            reqs.append(rule(n, in_list(i, len(vals))))
+            reqs.append(rule(n, in_list(n)))
+    # 行ごとに変わるプルダウン：列ごと外してから、職種などが入っている行にだけ付ける
+    dep_count = 0
+    for kind in DEPENDENT:
+        if kind not in head:
+            continue
+        reqs.append({"setDataValidation": {"range": cell_range(kind)}})
+        for i, r in enumerate(table[1:], start=1):
+            values = {n: (r[head.index(n)].strip() if n in head and head.index(n) < len(r) else "")
+                      for n in ("職種", "分類", "勤務地_都道府県")}
+            key = list_key(kind, values)
+            if key in place:
+                reqs.append(rule(kind, in_list(key), r0=i, r1=i + 1))
+                dep_count += 1
     reqs = [r for r in reqs if r["setDataValidation"]["range"] is not None]  # 見出しの無い列は飛ばす
     reqs += [
         {"repeatCell": {"range": {"sheetId": ws.id, "startRowIndex": 0, "endRowIndex": 1},
@@ -331,7 +397,11 @@ def setup_sheet(book, bank: generator.Bank) -> list[str]:
     ]
     book.batch_update({"requests": reqs})
     done_list.append(f"プルダウンを付けました（会社 {len(companies)}社・職種 {len(categories)}種類・画像カテゴリー {len(images)}種類・"
-                     f"職種名選択 {len(titles)}件・都道府県 {len(prefs)}。作り方・フォーマット・分類も。夜勤有無はチェックボックス）")
+                     f"都道府県 {len(prefs)}。作り方・フォーマット・分類も。夜勤有無はチェックボックス）")
+    note = "" if sbase is not None else "（施策の土台を読めなかったので、職種名指定の候補はありません）"
+    if sbase is not None and bunrui_read is None:
+        note = "（分類ブックを読めなかったので、6重め/7軽めの職種名指定の候補はありません）"
+    done_list.append(f"職種・分類・都道府県で変わるプルダウン：候補 {len(depend)}通り、入っている行の {dep_count}か所に付けました{note}")
     return done_list
 
 
