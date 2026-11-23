@@ -9,6 +9,7 @@ Q-mate は1つの会社のアカウントに載せられる原稿の数に上限
 """
 import csv
 import re
+import threading
 from datetime import date, datetime
 from pathlib import Path
 
@@ -51,11 +52,20 @@ def memo_filters(date_from: date | None, date_to: date | None, memo: str = "") -
     return months if len(months) <= 6 else [""]
 
 
-def row_filter(date_from: date | None, date_to: date | None, memo: str = ""):
+def keep_memos(text: str) -> list[str]:
+    """「残すメモ」欄の値を、1つずつの文字に分ける（改行・「、」・「,」で区切る）。"""
+    return [t.strip() for t in re.split(r"[\n、，,]", text or "") if t.strip()]
+
+
+def row_filter(date_from: date | None, date_to: date | None, memo: str = "", keep_memo: str = ""):
     """取り出した行のうち、取り下げる行かどうかを決める関数（メモ列の値を受け取る）。
 
     作成日を指定したときは、メモの作成日が読めない行と期間外の行は取り下げない。
+    keep_memo（残すメモ）のどれかをメモに含む行は、期間に入っていても取り下げない。
+    関数の kept に、残すメモで残した件数が入る。
     """
+    keeps = keep_memos(keep_memo)
+
     def keep(memo_value: str) -> bool:
         if memo and memo not in memo_value:
             return False
@@ -63,18 +73,26 @@ def row_filter(date_from: date | None, date_to: date | None, memo: str = ""):
             d = memo_date(memo_value)
             if d is None or (date_from and d < date_from) or (date_to and d > date_to):
                 return False
+        if any(k in memo_value for k in keeps):
+            keep.kept += 1
+            return False
         return True
+    keep.kept = 0
     return keep
 
 
 def make_chunks(src, out_dir: Path, label: str, update_type: str, status: str,
                 chunk_rows: int = 10000, encoding: str = "utf-8", newline: str = "\r\n",
-                keep=None) -> tuple[list[Path], int]:
+                keep=None, slim: bool = False, skip_status: str = "") -> tuple[list[Path], int]:
     """取り出した CSV の更新種別とステータスを書き換え、chunk_rows 件ずつのファイルに分ける。
+
+    slim なら UID・更新種別・ステータス以外の欄を空にする（見出しはそのまま）。取り下げにはこの3つだけで足り、
+    原稿の中身をそのまま送り返すと1万件で約60MBになってアップロードと Q-mate の受付に時間がかかるため。
 
     ファイルは数百 MB になることがあるので、1行ずつ読みながら書き出す。UID のない行は消せないので飛ばす。
     src は1つのファイルか、ファイルのリスト（月ごとに分けて取り出したもの。同じ UID は1回だけ）。
     keep を渡すと、メモ列の値で keep が True を返す行だけを残す。
+    skip_status を渡すと、今そのステータスの行は飛ばす（掲載状況変更で、すでに変更後のステータスの原稿）。
     戻り値は（分けたファイルのリスト, 取り下げる件数）。
     """
     csv.field_size_limit(2 ** 31 - 1)
@@ -95,6 +113,8 @@ def make_chunks(src, out_dir: Path, label: str, update_type: str, status: str,
                     continue
                 if keep and not keep(row[memo] if memo is not None and memo < len(row) else ""):
                     continue
+                if skip_status and row[st].strip() == skip_status:
+                    continue
                 seen.add(row[uid])
                 if total % chunk_rows == 0:
                     if f:
@@ -104,6 +124,10 @@ def make_chunks(src, out_dir: Path, label: str, update_type: str, status: str,
                     writer = csv.writer(f, lineterminator=newline, quoting=csv.QUOTE_MINIMAL)
                     writer.writerow(header)
                     paths.append(path)
+                if slim:
+                    out = [""] * len(header)
+                    out[uid] = row[uid]
+                    row = out
                 row[kind], row[st] = update_type, status
                 writer.writerow(row)
                 total += 1
@@ -114,18 +138,19 @@ def make_chunks(src, out_dir: Path, label: str, update_type: str, status: str,
 
 def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_run: bool = False,
         log=print, date_from: date | None = None, date_to: date | None = None, memo: str = "",
-        export_status: str | None = None) -> dict:
+        export_status: str | None = None, keep_memo: str = "") -> dict:
     """1社分の取り下げ。dry_run なら取り出しとファイル分けまでで止める。結果を dict で返す。
 
     date_from / date_to：求人メモの作成日がこの期間の原稿だけを取り下げる（どちらも省略で全期間）。
     memo：メモにこの文字を含む原稿だけ（Q-mate のメモ欄にも入れて絞る）。
+    keep_memo：メモにこの文字（改行・「、」区切りで複数）を含む原稿は取り下げずに残す。
     """
     from .uploader import QmateUploader
     from .accounts import qmate_config
 
     td = settings["takedown"]
     status = export_status or td.get("export_status", "公開")
-    cond = conditions(company, date_from, date_to, memo, status)
+    cond = conditions(company, date_from, date_to, memo, status, keep_memo)
     if not dry_run:
         # さきほど同じ条件で「取り出しと件数の確認」をしていれば、Q-mate から取り出し直さずにそのファイルを使う
         found = find_prepared(cond)
@@ -151,12 +176,15 @@ def run(company: str, settings: dict, out_root: Path, headed: bool = False, dry_
             log(f"取り出し {i}/{len(queries)}（メモ「{qy}」）")
         name = f"{label}_取り出し.csv" if len(queries) == 1 else f"{label}_取り出し_{i}.csv"
         src.append(up.export_template(status, out_dir / name, memo=qy, log=log))
-    keep = row_filter(date_from, date_to, memo) if (date_from or date_to or memo) else None
+    keeps = keep_memos(keep_memo)
+    keep = row_filter(date_from, date_to, memo, keep_memo) if (date_from or date_to or memo or keeps) else None
     chunks, total = make_chunks(src, out_dir, label, td["update_type"], td["status"], td.get("chunk_rows", 10000),
-                                keep=keep, **settings["csv"])
-    log(f"取り下げる原稿: {total}件（{len(chunks)}ファイルに分けました）")
+                                keep=keep, slim=td.get("slim_csv", False), **settings["csv"])
+    kept = keep.kept if keep else 0
+    log(f"取り下げる原稿: {total}件（{len(chunks)}ファイルに分けました）"
+        + (f"。残すメモ（{'、'.join(keeps)}）に当たる {kept}件 は残します" if keeps else ""))
     result = {"company": company, "count": total, "files": [str(c) for c in chunks], "uploaded": 0,
-              "span": span, "memo": query, "at": datetime.now().isoformat(timespec="seconds")}
+              "span": span, "memo": query, "kept": kept, "at": datetime.now().isoformat(timespec="seconds")}
     if dry_run:
         # 確認のときに取り出したファイルは残しておき、あとでそのまま取り下げられるようにする（use_prepared）
         if chunks:
@@ -182,6 +210,10 @@ def describe(date_from: date | None, date_to: date | None) -> str:
 
 
 # ---------------------------------------------------------------- 確認で取り出したファイルを使って取り下げる
+# 会社ごとに同時に取り下げるとき、記録ファイルを書くのは1つずつ（読み直して自分の分だけ書き換える）
+_prepared_lock = threading.RLock()
+
+
 def _prepared_path() -> Path:
     from . import config
     return config.STATE_DIR / "takedown_prepared.json"
@@ -200,10 +232,14 @@ def _save_prepared_all(data: dict) -> None:
     p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
-def conditions(company: str, date_from: date | None, date_to: date | None, memo: str, status: str) -> dict:
+def conditions(company: str, date_from: date | None, date_to: date | None, memo: str, status: str,
+               keep_memo: str = "") -> dict:
     """取り下げの条件（確認のときと同じ条件か比べるため）。"""
-    return {"company": company, "from": date_from.isoformat() if date_from else "",
+    cond = {"company": company, "from": date_from.isoformat() if date_from else "",
             "to": date_to.isoformat() if date_to else "", "memo": memo or "", "status": status}
+    if keep_memos(keep_memo):
+        cond["keep"] = keep_memos(keep_memo)
+    return cond
 
 
 def find_prepared(cond: dict, today: date | None = None) -> dict | None:
@@ -213,13 +249,19 @@ def find_prepared(cond: dict, today: date | None = None) -> dict | None:
 
 def save_prepared(result: dict, status: str, cond: dict | None = None) -> str:
     """「取り出しと件数の確認だけ」の結果を残す。名前（取り出した日時と会社）を返す。"""
-    data = _load_prepared()
     name = Path(result["files"][0]).parent.name
-    data[name] = {"company": result["company"], "count": result["count"], "files": result["files"],
-                  "span": result["span"], "memo": result["memo"], "status": status, "at": result["at"],
-                  "cond": cond or {}, "uploaded": 0, "finished_at": ""}
-    _save_prepared_all(data)
+    _set_prepared(name, {"company": result["company"], "count": result["count"], "files": result["files"],
+                                "span": result["span"], "memo": result["memo"], "status": status, "at": result["at"],
+                         "kept": result.get("kept", 0), "cond": cond or {}, "uploaded": 0, "finished_at": ""})
     return name
+
+
+def _set_prepared(name: str, fields: dict) -> None:
+    """記録ファイルの name の分だけを書き換える（ほかの会社の分は、書く直前に読み直したものを残す）。"""
+    with _prepared_lock:
+        data = _load_prepared()
+        data[name] = dict(data.get(name, {}), **fields)
+        _save_prepared_all(data)
 
 
 def prepared_list(today: date | None = None) -> list[dict]:
@@ -273,8 +315,9 @@ def use_prepared(name: str, settings: dict, headed: bool = False, log=print, tod
             raise RuntimeError(f"取り下げの取り込みに失敗しました（{path.name}）: {res.message}。"
                                "もう一度押すと、残りのファイルから続けます")
         r["uploaded"] = i
-        _save_prepared_all(data)
+        _set_prepared(name, {"uploaded": i})
     r["finished_at"] = datetime.now().isoformat(timespec="seconds")
-    _save_prepared_all(data)
+    _set_prepared(name, {"finished_at": r["finished_at"]})
     return {"company": r["company"], "count": r["count"], "files": r["files"], "uploaded": len(files),
-            "span": r["span"], "memo": r["memo"], "at": r["finished_at"], "from_prepared": name}
+            "span": r["span"], "memo": r["memo"], "kept": r.get("kept", 0), "at": r["finished_at"],
+            "from_prepared": name}

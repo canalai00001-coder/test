@@ -21,6 +21,8 @@
   "_hitomane_説明": "poll_interval_ms ごとに「最新を表示する」を押して、取出・取込ファイル一覧の結果を待つ（1440回 × 5秒 = 2時間まで）。約35,000件の取り出しは28分半かかった（2026-11-16）。",
   "_update_説明": "操作画面の「更新」で最新の版を取り込む GitHub のリポジトリとブランチ。subdir の中身だけを上書きする（settings.local.json・service_account.json・state・output は残す）。",
   "update": {"repo": "canalai00001-coder/test", "branch": "claude/relaxed-clarke-nk8kc9", "subdir": "hitomane_agent"},
+  "_drive_backup_説明": "入稿した原稿の CSV を Google ドライブに保存する先。共有ドライブのフォルダの URL を folder に入れる（空欄なら保存しない）。保存先の中に年-月のフォルダを作って入れる。ツールの鍵 testcanal@qmate-512914.iam.gserviceaccount.com を共有ドライブのメンバー（コンテンツ管理者）にする。マイドライブには保存できない（鍵に保存容量が無い）。",
+  "drive_backup": {"folder": ""},
   "_csv_説明": "取り込む CSV の文字コードと改行。取り出した CSV（2026-11-16 の画面調査）と同じにする：Shift_JIS（cp932）・BOM なし・改行 CRLF（セルの中の改行も CRLF）・必要なときだけ \"\" で囲む。見出しは新FMT(テンプレ)の192列と同じ。",
   "csv": {"encoding": "cp932", "newline": "\r\n"}
 }

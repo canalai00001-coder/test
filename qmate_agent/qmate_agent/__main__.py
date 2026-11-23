@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 from datetime import date, datetime
 from types import SimpleNamespace
 
@@ -232,7 +233,27 @@ def cmd_upload(args) -> int:
         uploaded[ms.name] = {"hash": rv["hash"], "rows": len(ms.rows),
                              "uploaded_at": datetime.now().isoformat(timespec="seconds")}
         _save_state("uploaded.json", uploaded)
+        from . import drive_backup
+        drive_backup.backup([csv_path], settings)  # 失敗しても入稿の結果は変えない
     return 0 if result.ok else 2
+
+
+def cmd_drive_backup(args) -> int:
+    """原稿のバックアップ先（共有ドライブ）を確かめる・送れなかった原稿を送り直す・指定した CSV を送る。"""
+    from . import drive_backup
+
+    settings = config.load("settings.json")
+    try:
+        print(f"保存先: {drive_backup.check_folder(settings)}（共有ドライブ）")
+    except Exception as e:
+        print(f"保存先に届きません: {e}")
+        return 1
+    paths = args.files or (drive_backup.failed() if args.retry else [])
+    if args.retry and not paths:
+        print("送り直す原稿はありません")
+    if paths:
+        return 0 if len(drive_backup.backup(paths, settings)) == len(paths) else 2
+    return 0
 
 
 def cmd_schedule(args) -> int:
@@ -246,6 +267,8 @@ def cmd_schedule(args) -> int:
         targets = [p for p in plans if p.row == args.row]
     else:
         targets = [p for p in plans if p.run_date == today]
+    if getattr(args, "takedown_only", False) or getattr(args, "status_only", False):
+        targets = []
     done = _state("schedule.json")
     if not args.force:
         skipped = [p for p in targets if p.key in done]
@@ -261,22 +284,53 @@ def cmd_schedule(args) -> int:
         td_targets = []
     else:
         td_targets = [r for r in td_rows if r.run_date == today]
+    if getattr(args, "takedown_company", None):
+        names = set(args.takedown_company)
+        td_targets = [r for r in td_targets if r.company in names]
+    if getattr(args, "status_only", False):
+        td_targets = []
     if not args.force:
         for r in [r for r in td_targets if r.key in done]:
             print(f"取り下げ予定表 {r.row}行目は {done[r.key]['finished_at']} に実行済みです（やり直すときは --force）")
         td_targets = [r for r in td_targets if r.key not in done]
-    if not targets and not td_targets:
-        print(f"入稿予定表・取り下げ予定表に、{today:%Y/%m/%d} に実行する行がありません")
+    # 掲載状況変更（求人メモで指定した原稿のステータスを変える行）
+    st_sheet = settings.get("status_sheet", "掲載状況変更")
+    st_rows = sc.read_status_plan(book.plan_table(st_sheet), today)
+    if getattr(args, "status_row", None):
+        st_targets = [r for r in st_rows if r.row == args.status_row]
+    elif args.row or args.takedown_row or getattr(args, "takedown_only", False):
+        st_targets = []
+    else:
+        st_targets = [r for r in st_rows if r.run_date == today]
+    if getattr(args, "status_row", None) and not args.takedown_row:
+        td_targets = []
+    if getattr(args, "takedown_company", None):
+        st_targets = [r for r in st_targets if r.company in set(args.takedown_company)]
+    if not args.force:
+        for r in [r for r in st_targets if r.key in done]:
+            print(f"掲載状況変更 {r.row}行目は {done[r.key]['finished_at']} に実行済みです（やり直すときは --force）")
+        st_targets = [r for r in st_targets if r.key not in done]
+    if not targets and not td_targets and not st_targets:
+        print(f"入稿予定表・取り下げ予定表・掲載状況変更に、{today:%Y/%m/%d} に実行する行がありません")
         return 0
 
     from . import accounts
     gas_targets = settings["schedule_targets"]
     commutes = {}
-    from .takedown import describe
+    from .takedown import describe, keep_memos as takedown_keeps
     for r in td_targets:
         print(f"取り下げ予定表 {r.row}行目: {r.company} / {describe(r.date_from, r.date_to)}"
-              f"{f' / メモに「{r.memo}」を含む' if r.memo else ''} / 対象ステータス "
+              f"{f' / メモに「{r.memo}」を含む' if r.memo else ''}"
+              f"{' / 残すメモ「' + '、'.join(takedown_keeps(r.keep_memo)) + '」' if r.keep_memo else ''} / 対象ステータス "
               f"{r.status or settings['takedown']['export_status']} → 取り下げ（{settings['takedown']['update_type']}）")
+        problem = accounts.login_problem(settings, r.company)
+        if problem:
+            print(problem)
+            return 1
+    from .status_change import merge_memos
+    for r in st_targets:
+        print(f"掲載状況変更 {r.row}行目: {r.company} / 求人メモ {len(merge_memos([r.memos]))}件 / "
+              f"{r.status or settings.get('status_change', {}).get('export_status', '全てのステータス')} → {r.to_status or '（空欄）'}")
         problem = accounts.login_problem(settings, r.company)
         if problem:
             print(problem)
@@ -330,7 +384,8 @@ def cmd_schedule(args) -> int:
     if takedown_companies:
         print(f"※ {'、'.join(sorted(takedown_companies))} は、入稿の前に Q-mate にある"
               f"「{td['export_status']}」の原稿をすべて取り下げます（{td['update_type']}）")
-    question = "原稿を生成して Q-mate に入稿します" if targets else "Q-mate の原稿を取り下げます（元には戻せません）"
+    question = ("原稿を生成して Q-mate に入稿します" if targets else
+                "Q-mate の原稿を取り下げます（元には戻せません）" if td_targets else "Q-mate の原稿の掲載状況を変えます")
     if not args.yes and input(f"{question}。よろしいですか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
@@ -338,21 +393,9 @@ def cmd_schedule(args) -> int:
     run_id = datetime.now().strftime("%H%M")
     failed = 0
     takedown_done = {}
-    for r in td_targets:
-        print(f"\n=== 取り下げ予定表 {r.row}行目 ===")
-        res = _takedown(r.company, settings, args.headed, args.dry_run, date_from=r.date_from, date_to=r.date_to,
-                        memo=r.memo, export_status=r.status or None)
-        if isinstance(res, Exception):
-            failed += 1
-            text = f"失敗（{datetime.now():%m/%d %H:%M}）{res}"
-        else:
-            text = (f"{'取り出しと分割まで' if args.dry_run else '取り下げ済み'}（{datetime.now():%m/%d %H:%M}）"
-                    f"{res['count']}件 / {res['span']}")
-            if not args.dry_run:
-                done[r.key] = {"count": res["count"], "finished_at": datetime.now().isoformat(timespec="seconds")}
-                _save_state("schedule.json", done)
-        print(text)
-        _write_result(book, r.row, text, sheet=td_sheet)
+    failed += _run_takedown_rows(td_targets, settings, args, book, td_sheet, done)
+    if st_targets:
+        failed += _run_status_rows(st_targets, settings, args, book, st_sheet)
     for p in targets:
         c = commutes[p.row]
         t = gas_targets[c]
@@ -367,8 +410,7 @@ def cmd_schedule(args) -> int:
                 _check_and_upload(manuscripts, p, t, settings, args, takedown_companies, takedown_done)
                 result = f"{'テスト：CSV作成まで' if args.dry_run else '入稿済み'}（{datetime.now():%m/%d %H:%M}）{', '.join(sheets)}"
                 if not args.dry_run:
-                    done[p.key] = {"sheets": sheets, "finished_at": datetime.now().isoformat(timespec="seconds")}
-                    _save_state("schedule.json", done)
+                    _mark_done(done, [p.key], {"sheets": sheets})
                 _write_result(book, p.row, result)
                 continue
             values = sc.config_row(p, c, t, rules, today, run_id, args.status, args.count)
@@ -402,14 +444,13 @@ def cmd_schedule(args) -> int:
                     raise RuntimeError(f"{name} の入稿に失敗しました")
             result = f"{'CSV作成まで' if args.dry_run else '入稿済み'}（{datetime.now():%m/%d %H:%M}）{', '.join(sheets)}"
             if not args.dry_run:
-                done[p.key] = {"sheets": sheets, "finished_at": datetime.now().isoformat(timespec="seconds")}
-                _save_state("schedule.json", done)
+                _mark_done(done, [p.key], {"sheets": sheets})
         except Exception as e:
             failed += 1
             result = f"失敗（{datetime.now():%m/%d %H:%M}）{e}"
             print(result)
         _write_result(book, p.row, result)
-    print(f"\n完了: {len(targets) + len(td_targets) - failed}件 成功 / {failed}件 失敗")
+    print(f"\n完了: {len(targets) + len(td_targets) + len(st_targets) - failed}件 成功 / {failed}件 失敗")
     return 0 if not failed else 2
 
 
@@ -661,18 +702,160 @@ def _check_and_upload(manuscripts, p, t, settings, args, takedown_companies, tak
             raise RuntimeError(f"{ms.name} の入稿に失敗しました")
 
 
-def _takedown(company: str, settings: dict, headed: bool, dry_run: bool, **filters):
+def _run_takedown_rows(td_targets, settings, args, book, td_sheet, done) -> int:
+    """取り下げ予定表の行を実行する。失敗した行の数を返す。
+
+    Q-mate は取り込みを受け付けると、その会社では約11分つぎの取り込みができない。この待ちは会社（アカウント）
+    ごとなので、会社が違う行は同時に動かす（takedown.parallel 社まで）。同じ会社の行は上から順に1行ずつ。
+
+    同じ会社で、作成日の期間・メモに含む文字・対象ステータスが同じ行は、1回の取り下げにまとめて残すメモを合わせる。
+    （残すメモを1行に1つずつ書いたとき、行ごとに別々に取り下げると、ほかの行で残したい原稿が先の行で消えるため）
+    """
+    from . import schedule as sc
+    from .takedown import keep_memos as takedown_keeps
+
+    groups: dict[str, list] = {}
+    for r in td_targets:
+        jobs = groups.setdefault(r.company, [])
+        same = next((j for j in jobs if (j[0].date_from, j[0].date_to, j[0].memo, j[0].status)
+                     == (r.date_from, r.date_to, r.memo, r.status)), None)
+        if same:
+            same.append(r)
+        else:
+            jobs.append([r])
+    parallel = getattr(args, "parallel", None) or settings.get("takedown", {}).get("parallel", 4)
+    workers = max(1, min(int(parallel), len(groups)))
+    if workers > 1:
+        print(f"\n{len(groups)}社の取り下げを、{workers}社ずつ同時に行います"
+              "（表示は先頭の [会社名] で見分けてください）", flush=True)
+
+    def one_company(company: str, jobs: list) -> int:
+        log = (lambda m: _locked_print(f"[{company}] {m}")) if workers > 1 else _locked_print
+        failed = 0
+        for rows in jobs:
+            r = rows[0]
+            keeps = list(dict.fromkeys(k for x in rows for k in takedown_keeps(x.keep_memo)))
+            label = f"{r.row}行目" if len(rows) == 1 else f"{sc.row_ranges([x.row for x in rows])}行目（同じ条件なので1回にまとめます）"
+            log(f"=== 取り下げ予定表 {label} ===")
+            if len(rows) > 1 and keeps:
+                log(f"残すメモ {len(keeps)}件 を合わせて取り下げます")
+            res = _takedown(r.company, settings, args.headed, args.dry_run, log=log, date_from=r.date_from,
+                            date_to=r.date_to, memo=r.memo, export_status=r.status or None,
+                            keep_memo="\n".join(keeps))
+            if isinstance(res, Exception):
+                failed += len(rows)
+                text = f"失敗（{datetime.now():%m/%d %H:%M}）{res}"
+            else:
+                kept = f" / 残すメモ{len(keeps)}件に当たる {res.get('kept', 0)}件 を残した" if keeps else ""
+                text = (f"{'取り出しと分割まで' if args.dry_run else '取り下げ済み'}（{datetime.now():%m/%d %H:%M}）"
+                        f"{res['count']}件 / {res['span']}{kept}")
+                if len(rows) > 1:
+                    text += f"（{sc.row_ranges([x.row for x in rows])}行目をまとめて実行）"
+            with _STATE_LOCK:
+                if not isinstance(res, Exception) and not args.dry_run:
+                    _mark_done(done, [x.key for x in rows], {"count": res["count"]})
+                log(f"{label}: {text}")
+                for x in rows:
+                    _write_result(book, x.row, text, sheet=td_sheet)
+        return failed
+
+    if workers == 1:
+        return sum(one_company(c, rows) for c, rows in groups.items())
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return sum(ex.map(lambda item: one_company(*item), groups.items()))
+
+
+def _mark_done(done: dict, keys: list[str], info: dict) -> None:
+    """予定表の行を実行済みにする。ファイルを読み直してから足す（同時に動いている別の実行が書いた分を消さないため）。"""
+    now = datetime.now().isoformat(timespec="seconds")
+    for k in keys:
+        done[k] = dict(info, finished_at=now)
+    latest = _state("schedule.json")
+    latest.update({k: done[k] for k in keys})
+    _save_state("schedule.json", latest)
+
+
+def _run_status_rows(st_targets, settings, args, book, st_sheet) -> int:
+    """掲載状況変更シートの行を実行する。失敗した行の数を返す。
+
+    取り下げと同じく、会社が違う行は同時に動かし、同じ会社で対象ステータス・変更後ステータスが同じ行は
+    1回にまとめる（求人メモを合わせて1回取り出し、1回取り込む）。
+    """
+    from . import schedule as sc
+    from . import status_change
+
+    groups: dict[str, list] = {}
+    for r in st_targets:
+        jobs = groups.setdefault(r.company, [])
+        same = next((j for j in jobs if (j[0].status, j[0].to_status) == (r.status, r.to_status)), None)
+        if same:
+            same.append(r)
+        else:
+            jobs.append([r])
+    parallel = getattr(args, "parallel", None) or settings.get("takedown", {}).get("parallel", 4)
+    workers = max(1, min(int(parallel), len(groups)))
+    if workers > 1:
+        print(f"\n{len(groups)}社の掲載状況変更を、{workers}社ずつ同時に行います"
+              "（表示は先頭の [会社名] で見分けてください）", flush=True)
+    done = _state("schedule.json")
+
+    def one_company(company: str, jobs: list) -> int:
+        log = (lambda m: _locked_print(f"[{company}] {m}")) if workers > 1 else _locked_print
+        failed = 0
+        for rows in jobs:
+            r = rows[0]
+            memos = status_change.merge_memos(x.memos for x in rows)
+            ranges = sc.row_ranges([x.row for x in rows])
+            log(f"=== 掲載状況変更 {ranges}行目 ===")
+            try:
+                res = status_change.run(company, memos, r.to_status, settings, config.OUTPUT_DIR,
+                                        export_status=r.status, headed=args.headed, dry_run=args.dry_run, log=log)
+                miss = f" / 見つからない求人メモ {len(res['missing'])}件" if res["missing"] else ""
+                text = (f"{'取り出しと分割まで' if args.dry_run else '変更済み'}（{datetime.now():%m/%d %H:%M}）"
+                        f"{res['count']}件を「{r.to_status}」に / 求人メモ {res['memos']}件{miss}")
+                if len(rows) > 1:
+                    text += f"（{ranges}行目をまとめて実行）"
+                ok = True
+            except Exception as e:
+                failed += len(rows)
+                text, ok = f"失敗（{datetime.now():%m/%d %H:%M}）{e}", False
+            with _STATE_LOCK:
+                if ok and not args.dry_run:
+                    _mark_done(done, [x.key for x in rows], {"count": res["count"]})
+                log(f"{ranges}行目: {text}")
+                for x in rows:
+                    _write_result(book, x.row, text, sheet=st_sheet)
+        return failed
+
+    if workers == 1:
+        return sum(one_company(c, rows) for c, rows in groups.items())
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        return sum(ex.map(lambda item: one_company(*item), groups.items()))
+
+
+# 会社ごとに同時に取り下げるとき、画面の表示と state のファイル・予定表への書き込みは1つずつ行う
+_STATE_LOCK = threading.RLock()
+
+
+def _locked_print(msg: str) -> None:
+    with _STATE_LOCK:
+        print(msg, flush=True)
+
+
+def _takedown(company: str, settings: dict, headed: bool, dry_run: bool, log=print, **filters):
     """1社分の取り下げ。結果の dict か、失敗したときは例外を返す（同じ会社の次の行でも使う）。
 
     filters は takedown.run の date_from・date_to・memo・export_status（取り下げ予定表の行の指定）。
     """
     from . import takedown
 
-    print(f"\n--- 取り下げ: {company} ---")
+    log(f"--- 取り下げ: {company} ---")
     try:
-        result = takedown.run(company, settings, config.OUTPUT_DIR, headed=headed, dry_run=dry_run, **filters)
+        result = takedown.run(company, settings, config.OUTPUT_DIR, headed=headed, dry_run=dry_run, log=log, **filters)
     except Exception as e:
-        print(f"取り下げに失敗しました: {e}")
+        log(f"取り下げに失敗しました: {e}")
         return e
     if not dry_run:
         _record_takedown(result)
@@ -680,9 +863,10 @@ def _takedown(company: str, settings: dict, headed: bool, dry_run: bool, **filte
 
 
 def _record_takedown(result: dict) -> None:
-    history = _state("takedown.json")
-    history.setdefault(result["company"], []).append(result)
-    _save_state("takedown.json", history)
+    with _STATE_LOCK:
+        history = _state("takedown.json")
+        history.setdefault(result["company"], []).append(result)
+        _save_state("takedown.json", history)
 
 
 def cmd_takedown(args) -> int:
@@ -695,13 +879,15 @@ def cmd_takedown(args) -> int:
     status = args.status or td["export_status"]
     if not args.yes and not args.dry_run and input(
             f"{args.company} の Q-mate にある「{status}」の原稿のうち、{takedown.describe(date_from, date_to)}"
-            f"{f'・メモに「{args.memo}」を含む' if args.memo else ''}ものを「{td['update_type']}」します。"
+            f"{f'・メモに「{args.memo}」を含む' if args.memo else ''}ものを「{td['update_type']}」します"
+            f"{f'（メモに「{args.keep_memo}」を含むものは残す）' if args.keep_memo else ''}。"
             "元には戻せません。よろしいですか？ [y/N] > ").strip().lower() != "y":
         print("中止しました")
         return 1
     try:
         result = takedown.run(args.company, settings, config.OUTPUT_DIR, headed=args.headed, dry_run=args.dry_run,
-                              date_from=date_from, date_to=date_to, memo=args.memo or "", export_status=status)
+                              date_from=date_from, date_to=date_to, memo=args.memo or "", export_status=status,
+                              keep_memo=args.keep_memo or "")
     except Exception as e:
         print(f"失敗: {e}")
         return 2
@@ -870,6 +1056,12 @@ def main(argv=None) -> int:
     s.add_argument("--yes", action="store_true", help="実行前の確認を省く（毎日の自動実行用）")
     s.add_argument("--no-takedown", action="store_true", help="入稿前の前回分の取り下げをしない")
     s.add_argument("--takedown-row", type=int, help="取り下げ予定表のこの行だけを、実行日に関係なく実行する")
+    s.add_argument("--takedown-only", action="store_true", help="取り下げ予定表の行だけを実行する（入稿予定表の行は動かさない）")
+    s.add_argument("--takedown-company", action="append",
+                   help="取り下げ予定表・掲載状況変更のうち、この会社の行だけを実行する（何度でも指定できる）")
+    s.add_argument("--status-only", action="store_true", help="掲載状況変更の行だけを実行する（入稿・取り下げはしない）")
+    s.add_argument("--status-row", type=int, help="掲載状況変更のこの行だけを、実行日に関係なく実行する")
+    s.add_argument("--parallel", type=int, help="同時に取り下げる会社の数（省略時は settings.json の takedown.parallel）")
     s.set_defaults(func=cmd_schedule)
 
     cp = sub.add_parser("compare", help="GAS で作った出力シートと、ツールで作った原稿を見比べる")
@@ -909,11 +1101,17 @@ def main(argv=None) -> int:
     t.add_argument("--from", dest="date_from", help="求人メモの作成日がこの日から（YYYY-MM-DD）")
     t.add_argument("--to", dest="date_to", help="求人メモの作成日がこの日まで（YYYY-MM-DD）")
     t.add_argument("--memo", help="メモにこの文字を含む原稿だけ")
+    t.add_argument("--keep-memo", help="メモにこの文字を含む原稿は残す（「、」区切りで複数）")
     t.add_argument("--status", help="取り出すステータス（省略時は settings.json の takedown.export_status）")
     t.add_argument("--dry-run", action="store_true", help="取り出しとファイル分けまでで止める（Q-mate は変えない）")
     t.add_argument("--headed", action="store_true", help="ブラウザを表示して動かす")
     t.add_argument("--yes", action="store_true", help="実行前の確認を省く")
     t.set_defaults(func=cmd_takedown)
+
+    db = sub.add_parser("drive-backup", help="原稿のバックアップ先（共有ドライブ）を確かめる・送り直す")
+    db.add_argument("files", nargs="*", help="送る CSV（省略すると保存先を確かめるだけ）")
+    db.add_argument("--retry", action="store_true", help="送れなかった原稿を送り直す")
+    db.set_defaults(func=cmd_drive_backup)
 
     args = ap.parse_args(argv)
     return args.func(args)

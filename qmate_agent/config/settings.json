@@ -66,6 +66,19 @@
     "update_type": "削除",
     "status": "終了",
     "chunk_rows": 10000,
+    "slim_csv": true,
+    "parallel": 4,
+    "result_poll_times": 360
+  },
+  "_drive_backup_説明": "入稿した原稿の CSV を Google ドライブに保存する先。共有ドライブのフォルダの URL を folder に入れる（空欄なら保存しない）。保存先の中に年-月のフォルダを作って入れる。ツールの鍵 testcanal@qmate-512914.iam.gserviceaccount.com を共有ドライブのメンバー（コンテンツ管理者）にする。マイドライブには保存できない（鍵に保存容量が無い）。",
+  "drive_backup": {"folder": "https://drive.google.com/drive/folders/19ySxbu3n7K7wpVpzzy52qbZ5ZR3e7St5"},
+  "status_sheet": "掲載状況変更",
+  "_status_change_説明": "掲載状況変更シートの行で、求人メモで指定した原稿のステータスを変える。export_status（対象ステータスが空欄のとき）の原稿を取り出し、更新種別を update_type、ステータスを変更後のものにして取り込む。求人メモが max_memo_exports 件までなら、メモ欄で1件ずつ絞って取り出す。",
+  "status_change": {
+    "export_status": "全てのステータス",
+    "update_type": "更新",
+    "max_memo_exports": 10,
+    "chunk_rows": 10000,
     "result_poll_times": 360
   },
   "_update_説明": "操作画面の「更新」で最新の版を取り込む GitHub のリポジトリとブランチ。subdir の中身だけを上書きする。",

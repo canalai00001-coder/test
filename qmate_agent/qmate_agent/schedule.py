@@ -141,12 +141,14 @@ class TakedownRow:
     date_to: date | None    # この日まで（どちらも空欄なら全期間）
     memo: str = ""          # メモにこの文字を含む原稿だけ
     status: str = ""        # 取り出すステータス（空欄なら settings.json の takedown.export_status）
+    keep_memo: str = ""     # メモにこの文字（改行・「、」区切りで複数）を含む原稿は取り下げずに残す
 
     @property
     def key(self) -> str:
         f = lambda d: d.isoformat() if d else ""
-        return "|".join(["取り下げ", str(self.row), f(self.run_date), self.company, f(self.date_from), f(self.date_to),
-                         self.memo, self.status])
+        parts = ["取り下げ", str(self.row), f(self.run_date), self.company, f(self.date_from), f(self.date_to),
+                 self.memo, self.status]
+        return "|".join(parts + ([self.keep_memo] if self.keep_memo else []))
 
 
 def read_takedown_plan(table: list[list], today: date) -> list[TakedownRow]:
@@ -157,7 +159,7 @@ def read_takedown_plan(table: list[list], today: date) -> list[TakedownRow]:
     col = {n: head.index(n) for n in ("実行日", "会社") if n in head}
     if len(col) < 2:
         return []
-    for n in ("作成日から", "作成日まで", "メモに含む文字", "対象ステータス"):
+    for n in ("作成日から", "作成日まで", "メモに含む文字", "対象ステータス", "残すメモ"):
         if n in head:
             col[n] = head.index(n)
     raw = lambda r, n: r[col[n]] if n in col and col[n] < len(r) else ""
@@ -168,7 +170,45 @@ def read_takedown_plan(table: list[list], today: date) -> list[TakedownRow]:
             continue
         d = lambda n: parse_date(raw(r, n), today) if str(raw(r, n)).strip() else None
         rows.append(TakedownRow(i, d("実行日"), company, d("作成日から"), d("作成日まで"),
-                                str(raw(r, "メモに含む文字")).strip(), str(raw(r, "対象ステータス")).strip()))
+                                str(raw(r, "メモに含む文字")).strip(), str(raw(r, "対象ステータス")).strip(),
+                                str(raw(r, "残すメモ")).strip()))
+    return rows
+
+
+@dataclass
+class StatusRow:
+    """掲載状況変更シートの1行（求人メモで指定した原稿のステータスを変える）。"""
+    row: int
+    run_date: date | None
+    company: str
+    memos: str              # 求人メモ（改行・「、」区切りで複数）
+    status: str = ""        # 取り出すステータス（空欄なら settings.json の status_change.export_status）
+    to_status: str = ""     # 変更後ステータス
+
+    @property
+    def key(self) -> str:
+        f = lambda d: d.isoformat() if d else ""
+        return "|".join(["掲載状況変更", str(self.row), f(self.run_date), self.company, self.memos, self.status,
+                         self.to_status])
+
+
+def read_status_plan(table: list[list], today: date) -> list[StatusRow]:
+    """掲載状況変更シート（1行目が見出し）から、会社が入っている行を読む。"""
+    if not table:
+        return []
+    head = [header_name(h) for h in table[0]]
+    col = {n: head.index(n) for n in ("実行日", "会社", "求人メモ", "対象ステータス", "変更後ステータス") if n in head}
+    if not {"実行日", "会社", "求人メモ", "変更後ステータス"} <= set(col):
+        return []
+    raw = lambda r, n: r[col[n]] if n in col and col[n] < len(r) else ""
+    rows = []
+    for i, r in enumerate(table[1:], start=2):
+        company = str(raw(r, "会社")).strip()
+        if not company:
+            continue
+        run = parse_date(raw(r, "実行日"), today) if str(raw(r, "実行日")).strip() else None
+        rows.append(StatusRow(i, run, company, str(raw(r, "求人メモ")).strip(), str(raw(r, "対象ステータス")).strip(),
+                              str(raw(r, "変更後ステータス")).strip()))
     return rows
 
 

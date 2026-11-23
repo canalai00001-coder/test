@@ -90,7 +90,8 @@ class App:
 
     def takedown_args(self, body: dict) -> tuple[str, list[str]]:
         args = ["takedown", "--company", body["company"], "--yes"]
-        for key, opt in (("date_from", "--from"), ("date_to", "--to"), ("memo", "--memo"), ("status", "--status")):
+        for key, opt in (("date_from", "--from"), ("date_to", "--to"), ("memo", "--memo"), ("status", "--status"),
+                         ("keep_memo", "--keep-memo")):
             if body.get(key):
                 args += [opt, str(body[key])]
         title = f"取り下げ（{body['company']}）" + ("：取り出しと分割だけ" if body.get("dry_run") else "")
@@ -164,7 +165,7 @@ class App:
                   "done": is_done(p.key, results["plan"].get(p.row, ""), done)}
                  for p in sc.read_plan(book.plan_table(), today)]
         tds = [{"row": r.row, "date": fmt(r.run_date), "today": r.run_date == today, "company": r.company,
-                "from": fmt(r.date_from), "to": fmt(r.date_to), "memo": r.memo, "status": r.status or "公開",
+                "from": fmt(r.date_from), "to": fmt(r.date_to), "memo": r.memo, "keep": r.keep_memo, "status": r.status or "公開",
                 "result": results["takedown"].get(r.row, ""),
                 "done": is_done(r.key, results["takedown"].get(r.row, ""), done)}
                for r in sc.read_takedown_plan(book.plan_table(settings.get("takedown_sheet", "取り下げ予定表")), today)]
@@ -450,6 +451,7 @@ pre{background:#0d1117;color:#e6edf3;padding:12px;border-radius:8px;height:320px
       <label>作成日から（空欄=最初から）<input type="date" id="t_from"></label>
       <label>作成日まで（空欄=最後まで）<input type="date" id="t_to"></label>
       <label>メモに含む文字（任意）<input id="t_memo" placeholder="例：-2-2-7"></label>
+      <label>残すメモ（任意・「、」区切りで複数）<input id="t_keep" placeholder="この文字をメモに含む原稿は取り下げない"></label>
       <label>対象ステータス<select id="t_status"><option>公開</option><option>下書き</option><option>下書き＋公開</option><option>終了</option><option>全てのステータス</option></select></label>
     </div>
     <p class="note">1日だけなら「から」と「まで」に同じ日付を入れてください。作成日は求人メモの「22-<b>261104</b>-…」の部分です。</p>
@@ -550,7 +552,7 @@ function render(){const show=p_showdone.checked;const d={plans:PLANS.filter(p=>s
   const hidden=(PLANS.length-d.plans.length)+(TDS.length-d.takedowns.length);
   hidden_note.textContent=hidden?`実行済みの行 ${hidden}件 を隠しています（「実行済みの行も表示」で出せます）`:"";
   plans.innerHTML=d.plans.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>職種</th><th>夜勤</th><th>通勤/入寮</th><th>ステータス</th><th>原稿数</th><th>職種名選択</th><th>職種名の確認</th><th>実行結果</th><th></th></tr>`+d.plans.map(p=>`<tr class="${p.today?"today":""}"><td>${p.row}</td><td>${esc(p.date)}</td><td>${esc(p.company)}</td><td>${esc(p.category)}</td><td>${p.night}</td><td>${esc(p.commute)}</td><td>${esc(p.status)}</td><td>${p.count}</td><td>${esc(p.title)}</td><td class="${p.check.startsWith("❌")?"ng":""}">${esc(p.check)}</td><td>${esc(p.result)}</td><td><button class="btn" onclick="testRow(${p.row})">テスト</button> <button class="btn" onclick="runRow(${p.row},'${esc(p.status)}',${p.count})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
-  takedowns.innerHTML=d.takedowns.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>作成日から</th><th>作成日まで</th><th>メモ</th><th>ステータス</th><th>実行結果</th><th></th></tr>`+d.takedowns.map(r=>`<tr class="${r.today?"today":""}"><td>${r.row}</td><td>${esc(r.date)}</td><td>${esc(r.company)}</td><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td>${esc(r.memo)}</td><td>${esc(r.status)}</td><td>${esc(r.result)}</td><td><button class="btn danger" onclick="runTdRow(${r.row})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
+  takedowns.innerHTML=d.takedowns.length?`<table><tr><th>行</th><th>実行日</th><th>会社</th><th>作成日から</th><th>作成日まで</th><th>メモ</th><th>残すメモ</th><th>ステータス</th><th>実行結果</th><th></th></tr>`+d.takedowns.map(r=>`<tr class="${r.today?"today":""}"><td>${r.row}</td><td>${esc(r.date)}</td><td>${esc(r.company)}</td><td>${esc(r.from)}</td><td>${esc(r.to)}</td><td>${esc(r.memo)}</td><td>${esc(r.keep)}</td><td>${esc(r.status)}</td><td>${esc(r.result)}</td><td><button class="btn danger" onclick="runTdRow(${r.row})">この行を実行</button></td></tr>`).join("")+"</table>":'<div class="empty">行がありません</div>';
 }
 async function start(p,b,msg){if(msg&&!confirm(msg))return;try{await post(p,b);since=0;log.textContent="";poll()}catch(e){alert(e.message)}}
 run_today.onclick=()=>start("/api/schedule",opt(),"入稿予定表・取り下げ予定表の今日の行を実行します。\n取り下げ予定表の行は Q-mate の原稿を削除します（元に戻せません）。よろしいですか？"+ngNote(PLANS.filter(p=>p.today&&!p.done&&p.check.startsWith("❌"))));
@@ -560,10 +562,10 @@ test_today.onclick=()=>{const n=PLANS.filter(p=>p.today&&!p.done).length;if(!n)r
 const ngNote=rows=>rows.length?`\n\n※ 職種名の確認が ❌ の行があります（${rows.map(p=>p.row+"行目").join("、")}）。このまま実行すると、その行は生成で止まります。`:"";
 function runRow(row,status,count){const ng=PLANS.filter(p=>p.row===row&&p.check.startsWith("❌"));start("/api/schedule",{...opt(),row},`入稿予定表 ${row}行目（${status}・${count}件）を実行します。よろしいですか？`+ngNote(ng))}
 function runTdRow(row){start("/api/schedule",{...opt(),takedown_row:row},`取り下げ予定表 ${row}行目を実行します。\nQ-mate の原稿を削除します（元に戻せません）。よろしいですか？`)}
-const tBody=()=>({company:t_company.value,date_from:t_from.value,date_to:t_to.value,memo:t_memo.value.trim(),status:t_status.value,headed:t_headed.checked});
+const tBody=()=>({company:t_company.value,date_from:t_from.value,date_to:t_to.value,memo:t_memo.value.trim(),keep_memo:t_keep.value.trim(),status:t_status.value,headed:t_headed.checked});
 const span=b=>!b.date_from&&!b.date_to?"全期間":b.date_from===b.date_to?b.date_from:`${b.date_from||"最初"}〜${b.date_to||"最後"}`;
 t_dry.onclick=()=>start("/api/takedown",{...tBody(),dry_run:true});
-t_run.onclick=()=>{const b=tBody();start("/api/takedown",b,`${b.company} の「${b.status}」の原稿のうち、作成日：${span(b)}${b.memo?"・メモに「"+b.memo+"」を含む":""}ものを削除します。\n元には戻せません。よろしいですか？`)};
+t_run.onclick=()=>{const b=tBody();start("/api/takedown",b,`${b.company} の「${b.status}」の原稿のうち、作成日：${span(b)}${b.memo?"・メモに「"+b.memo+"」を含む":""}ものを削除します${b.keep_memo?"（メモに「"+b.keep_memo+"」を含むものは残す）":""}。\n元には戻せません。よろしいですか？`)};
 let since=0,timer=null;
 async function poll(){clearTimeout(timer);try{const j=await api("/api/job?since="+since);if(j.title)job_title.textContent="実行の記録："+j.title;
  if(j.lines.length){log.textContent+=j.lines.join("\n")+"\n";log.scrollTop=log.scrollHeight}since=j.next??since;

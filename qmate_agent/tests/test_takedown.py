@@ -43,6 +43,19 @@ class TestChunks(unittest.TestCase):
         self.assertEqual(read(paths[0])[1][4], "改行を\n含む仕事内容")
         self.assertNotIn("uid3", [r[0] for p in paths for r in read(p)])
 
+    def test_slim_keeps_only_uid_kind_status(self):
+        src = export_file(3)
+        paths, total = takedown.make_chunks(src, Path(tempfile.mkdtemp()), "x", "削除", "終了", slim=True)
+        rows = read(paths[0])
+        self.assertEqual(rows[0], HEADER)  # 見出しはそのまま
+        self.assertEqual(rows[1], ["uid0", "削除", "終了", "", "", ""])
+        self.assertEqual(total, 3)
+        # 期間の絞り込みは空にする前のメモで行う
+        keep = takedown.row_filter(date(2026, 10, 21), date(2026, 10, 21))
+        paths, total = takedown.make_chunks(export_file(10), Path(tempfile.mkdtemp()), "x", "削除", "終了",
+                                            keep=keep, slim=True)
+        self.assertEqual((total, [r[0] for r in read(paths[0])[1:]]), (2, ["uid1", "uid6"]))
+
     def test_exact_multiple_has_no_empty_file(self):
         paths, total = takedown.make_chunks(export_file(20), Path(tempfile.mkdtemp()), "x", "削除", "終了", chunk_rows=10)
         self.assertEqual((len(paths), total), (2, 20))
@@ -189,3 +202,45 @@ class TestRunReusesDryRun(unittest.TestCase):
         use, err = self.run_td(date_to=date(2026, 11, 12))
         use.assert_not_called()
         self.assertEqual(err, "取り出しに進んだ")
+
+
+class TestKeepMemo(unittest.TestCase):
+    """残すメモ：期間に入っていても、メモにその文字を含む原稿は取り下げない。"""
+
+    def test_split(self):
+        self.assertEqual(takedown.keep_memos("-1495-\n-38-、AspiRove株式会社/G, x"),
+                         ["-1495-", "-38-", "AspiRove株式会社/G", "x"])
+        self.assertEqual(takedown.keep_memos(""), [])
+
+    def test_kept_rows_are_not_taken_down(self):
+        # メモの作成日は 10/20〜10/24。10/21〜10/22 の4件のうち、i=1（作成日 10/21・職種1）だけ残したい
+        src = Path(tempfile.mkdtemp()) / "e.csv"
+        with open(src, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(HEADER)
+            for i in range(10):
+                w.writerow([f"uid{i}", "", "公開", "", "", f"22-2610{20 + i % 5:02d}-2-2-7A-{1000 + i}-兵庫県"])
+        keep = takedown.row_filter(date(2026, 10, 21), date(2026, 10, 22), keep_memo="-1001-")
+        paths, total = takedown.make_chunks(src, Path(tempfile.mkdtemp()), "x", "削除", "終了", keep=keep)
+        self.assertEqual([r[0] for r in read(paths[0])[1:]], ["uid2", "uid6", "uid7"])
+        self.assertEqual((total, keep.kept), (3, 1))
+        # 期間を指定しなくても、残すメモだけで使える
+        keep = takedown.row_filter(None, None, keep_memo="-1001-、-1002-")
+        paths, total = takedown.make_chunks(src, Path(tempfile.mkdtemp()), "x", "削除", "終了", keep=keep)
+        self.assertEqual((total, keep.kept), (8, 2))
+
+    def test_conditions_differ_when_keep_changes(self):
+        a = takedown.conditions("A社", None, None, "", "公開")
+        self.assertNotIn("keep", a)  # 残すメモが無いときは前と同じ条件
+        self.assertNotEqual(a, takedown.conditions("A社", None, None, "", "公開", "-1001-"))
+
+    def test_plan_reads_keep_column(self):
+        from qmate_agent import schedule as sc
+        table = [["実行日", "会社", "作成日から\n(空欄=最初から)", "作成日まで", "メモに含む文字", "対象ステータス",
+                  "実行結果", "残すメモ\n(改行か「、」で複数)"],
+                 ["2026/11/23", "A社", "", "2026/11/18", "", "", "", "-1001-\n-1002-"],
+                 ["2026/11/23", "B社", "", "", "", "", ""]]
+        rows = sc.read_takedown_plan(table, date(2026, 11, 23))
+        self.assertEqual([r.keep_memo for r in rows], ["-1001-\n-1002-", ""])
+        self.assertTrue(rows[0].key.endswith("-1001-\n-1002-"))
+        self.assertEqual(rows[1].key.count("|"), 7)  # 残すメモが無い行の key は前と同じ

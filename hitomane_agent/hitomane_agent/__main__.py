@@ -405,6 +405,8 @@ def _import(ms, info, paths, settings, rules, headed=False, ask=None, stop_over_
         print(f"{'成功' if r.ok else '失敗'}: {r.file} {r.message}\n  {r.row_text}\n  画面: {r.screenshot}")
     if len(results) < len(paths):
         print(f"失敗したため、残りの {len(paths) - len(results)} ファイルは取り込んでいません")
+    from . import drive_backup
+    drive_backup.backup([p for p, r in zip(paths, results) if r.ok], settings)  # 取り込めたファイルだけ。失敗しても入稿は止めない
     from . import generated, plan
     if ok and generated.exists(ms.name):
         meta = generated.meta(ms.name)
@@ -530,6 +532,24 @@ def cmd_takedown(args) -> int:
 COMPANY_HELP = "入れる会社（会社名・会社のコード・会社名の一部）。1社だけのときと settings の company があるときは省ける"
 
 
+def cmd_drive_backup(args) -> int:
+    """原稿のバックアップ先（共有ドライブ）を確かめる・送れなかった原稿を送り直す・指定した CSV を送る。"""
+    from . import drive_backup
+
+    settings = config.load("settings.json")
+    try:
+        print(f"保存先: {drive_backup.check_folder(settings)}（共有ドライブ）")
+    except Exception as e:
+        print(f"保存先に届きません: {e}")
+        return 1
+    paths = args.files or (drive_backup.failed() if args.retry else [])
+    if args.retry and not paths:
+        print("送り直す原稿はありません")
+    if paths:
+        return 0 if len(drive_backup.backup(paths, settings)) == len(paths) else 2
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="hitomane_agent")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -604,6 +624,11 @@ def main(argv=None) -> int:
     s.add_argument("--user", help="使うログインID（省略時は settings の login_user）")
     s.add_argument("--company", help=COMPANY_HELP)
     s.set_defaults(func=cmd_takedown)
+    db = sub.add_parser("drive-backup", help="原稿のバックアップ先（共有ドライブ）を確かめる・送り直す")
+    db.add_argument("files", nargs="*", help="送る CSV（省略すると保存先を確かめるだけ）")
+    db.add_argument("--retry", action="store_true", help="送れなかった原稿を送り直す")
+    db.set_defaults(func=cmd_drive_backup)
+
     args = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):  # 画面（cp932）に出せない記号（▶ など）で止まらないように
         try:
