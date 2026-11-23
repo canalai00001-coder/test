@@ -19,7 +19,7 @@
     "import_poll_times": 1440
   },
   "_hitomane_説明": "poll_interval_ms ごとに「最新を表示する」を押して、取出・取込ファイル一覧の結果を待つ（1440回 × 5秒 = 2時間まで）。約35,000件の取り出しは28分半かかった（2026-11-16）。",
-  "_update_説明": "操作画面の「更新」で最新の版を取り込む GitHub のリポジトリとブランチ。subdir の中身だけを上書きする（settings.local.json・service_account.json・state・output は残す）。",
+  "_update_説明": "操作画面の「更新」で最新の版を取り込む GitHub のリポジトリとブランチ。操作画面（app.bat）を開くたびに新しい版を確かめて自動で取り込み、開き直す（update.auto を false にすると止まる）。subdir の中身だけを上書きする（settings.local.json・service_account.json・state・output は残す）。",
   "update": {"repo": "canalai00001-coder/test", "branch": "claude/relaxed-clarke-nk8kc9", "subdir": "hitomane_agent"},
   "_drive_backup_説明": "入稿した原稿の CSV を Google ドライブに保存する先。共有ドライブのフォルダの URL を folder に入れる（空欄なら保存しない）。保存先の中に年-月のフォルダを作って入れる。ツールの鍵 testcanal@qmate-512914.iam.gserviceaccount.com を共有ドライブのメンバー（コンテンツ管理者）にする。マイドライブには保存できない（鍵に保存容量が無い）。",
   "drive_backup": {"folder": ""},

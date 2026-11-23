@@ -395,7 +395,32 @@ def serve(port: int = 0, open_browser: bool = True) -> ThreadingHTTPServer:
     return server
 
 
+def auto_update(app) -> bool:
+    """操作画面を開くときに GitHub の最新の版を確かめ、新しければ取り込む。取り込んだら True。
+
+    settings.json の update.auto を false にすると確かめない。GitHub に繋がらないときは今の版のまま開く。"""
+    try:
+        if not config.load("settings.json").get("update", {}).get("auto", True):
+            return False
+        info = app.update_info()
+        if not info["new"]:
+            print(f"最新の版です（{info['latest']['message']}）")
+            return False
+        print(f"新しい版があります（{info['latest']['message']}）。取り込んでいます…")
+        r = app.update_from_github()
+        print(f"更新しました（{r['changed']}ファイル）")
+        if r.get("pip_ok") is False:
+            print("※ 部品（requirements.txt）の取り込みに失敗しました:\n" + r.get("pip", "")[-500:])
+        return True
+    except Exception as e:
+        print(f"（新しい版を確かめられませんでした：{e}。今の版のまま開きます）")
+        return False
+
+
 def main() -> None:
+    if "--no-auto-update" not in sys.argv and auto_update(App()):
+        # 取り込んだ新しい版で開き直す（今動いているのは古い版のプログラムのため）
+        sys.exit(subprocess.call([sys.executable, "-m", f"{__package__}.app", "--no-auto-update"]))
     server = serve()
     try:
         server.serve_forever()
