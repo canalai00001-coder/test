@@ -388,6 +388,7 @@ def _import(ms, info, paths, settings, rules, headed=False, ask=None, stop_over_
     acct = up.account()
     workflow.save_total(key, acct["total"], info.get("company", ""))
     stop = workflow.branch_problem(ms, acct["branches"], info.get("company", ""))
+    stop_over_limit = stop_over_limit and rules.get("stop_over_limit", True)  # 上限は絶対ではない（担当者 2026-11-24）。rules で切れる
     if not stop and stop_over_limit and acct["total"] is not None and acct["total"] + len(ms.rows) > rules["total_limit"]:
         stop = (f"募集管理の全件数 {acct['total']:,}件に {len(ms.rows):,}件を足すと上限 {rules['total_limit']:,}件を超えます。"
                 "先に取り下げてください")

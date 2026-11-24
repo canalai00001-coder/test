@@ -164,12 +164,22 @@ class TestSchedule(unittest.TestCase):
         self.assertTrue(any(r[0] == "canal benefits株式会社" for r in u.title_rows))
 
     def test_over_limit_is_not_uploaded(self):
+        f = config.CONFIG_DIR / "rules.local.json"
+        f.write_text('{"stop_over_limit": true}', encoding="utf-8")
+        self.addCleanup(f.unlink)
         FakeUploader.total_value = 49999
         code, out = self.cli("--yes", "--row", "2")
         self.assertEqual(code, 2)
         self.assertIn("上限 50,000件を超えます", out)
         self.assertEqual(FakeUploader.calls, [])
         self.assertTrue(self.book.ws.cells[(2, RES)].startswith("❌"))
+
+    def test_over_limit_uploads_by_default(self):
+        FakeUploader.total_value = 58771  # 上限は絶対ではない（担当者 2026-11-24）
+        code, out = self.cli("--yes", "--row", "2")
+        self.assertEqual(code, 0, out)
+        self.assertIn("上限を超えます", out)  # 知らせるだけ
+        self.assertEqual(len(FakeUploader.calls), 1)
 
     def test_ng_is_not_uploaded(self):
         self.book.ws.table[1] = prow(prefix="CB1", category="9検査")  # 職種名の無いカテゴリー
