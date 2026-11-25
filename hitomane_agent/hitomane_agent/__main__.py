@@ -149,7 +149,10 @@ def cmd_generate(args) -> int:
               + ("" if args.include_done else "。GAS で実行済みの行も使うときは --include-done を付けてください"))
         return 1
     from . import plan
-    results = generator.run(bank, plan.merge_usage(usage), targets, only_groups=wanted)
+    from . import work_numbers
+    guard = work_numbers.Guard.load()
+    results = generator.run(bank, plan.merge_usage(usage), targets, only_groups=wanted, guard=guard)
+    guard.save()
     code = 0
     for r in results:
         if r.error:
@@ -301,6 +304,8 @@ def _generate_plan(plans, gen_targets, base, settings, today) -> dict:
         sbook, reader, why = _shisaku_books(settings, need)
         sbase = plan.merge_shisaku_usage(shisaku.load_base(sbook))
     continuation = {}
+    from . import work_numbers
+    guard = work_numbers.Guard.load(today)  # 同じ日のお仕事番号と重ねない（重なれば選び直して知らせる）
     for p, t in zip(plans, gen_targets):
         problem = p.problem()
         if problem:
@@ -310,11 +315,13 @@ def _generate_plan(plans, gen_targets, base, settings, today) -> dict:
             if reader is None and why and generator._content_category(p.category) in ("重め", "軽め"):
                 results[p.row] = generator.GroupResult(t.group_id, "", p.company, p.category, [t], error=why)
                 continue
-            rs = shisaku.run(sbase, [t], reader, today=today, continuation=continuation)
+            rs = shisaku.run(sbase, [t], reader, today=today, continuation=continuation, guard=guard)
         else:
-            rs = generator.run(bank, usage, [t], today=today, stop_on_error=False, continuation=continuation)
+            rs = generator.run(bank, usage, [t], today=today, stop_on_error=False, continuation=continuation,
+                               guard=guard)
         if rs:
             results[p.row] = rs[0]
+    guard.save()
     return results
 
 

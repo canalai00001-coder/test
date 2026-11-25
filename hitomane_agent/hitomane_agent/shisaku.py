@@ -371,7 +371,7 @@ class Batch:
 
 
 def generate_batch(base: Base, t: g.Target, entry_prefix: str, reader, rnd: random.Random, now: datetime,
-                   today: date) -> Batch:  # hmGenerateBatchV2_
+                   today: date, work_guard=None) -> Batch:  # hmGenerateBatchV2_
     bank = base.bank
     content_category = g._content_category(t.category)
     heavy_light = content_category if content_category in ("重め", "軽め") else ""
@@ -470,6 +470,7 @@ def generate_batch(base: Base, t: g.Target, entry_prefix: str, reader, rnd: rand
         if not work_pool:
             raise g.GenerateError("「勤務時間」シート(新FMT用の勤務時間パターン。夜勤あり/なし別、または従来型)が見つかりません")
 
+    headers = NEW_FORMAT if is_new else OLD_FORMAT
     number = g._entry_numbers(entry_prefix)
     creation = g.parse_creation_date(t.creation_date, today)
     used_contents = base.content_used.get(f"{t.company}||{t.category}", set())
@@ -480,15 +481,19 @@ def generate_batch(base: Base, t: g.Target, entry_prefix: str, reader, rnd: rand
             cpool = e["contents"] or contents_pool
             unused = [c for c in cpool if c not in used_contents]  # hmPickUnusedContent_
             content = rnd.choice(unused or cpool)
-            imgs = [rnd.choice(images) if images else "", rnd.choice(support), rnd.choice(company_images)]
-            sal = salary()
-            if is_new:
-                row = build_new_row(base, e["title"], content, content_category, t, company, p["loc"], imgs, sal, creation,
-                                    number(offset), e["letter"], rnd.choice(work_pool), keys, rnd)
-            else:
-                row = build_old_row(base, e["title"], content, content_category, t, company, p["loc"], imgs, sal, creation,
-                                    number(offset), e["letter"], keys, rnd)
-            rows.append(row)
+            code = number(offset)
+
+            def make(p=p, e=e, content=content, code=code):  # 選び直すたびに画像・給与（と勤務時間）を引き直す
+                imgs = [rnd.choice(images) if images else "", rnd.choice(support), rnd.choice(company_images)]
+                sal = salary()
+                if is_new:
+                    r = build_new_row(base, e["title"], content, content_category, t, company, p["loc"], imgs, sal,
+                                      creation, code, e["letter"], rnd.choice(work_pool), keys, rnd)
+                else:
+                    r = build_old_row(base, e["title"], content, content_category, t, company, p["loc"], imgs, sal,
+                                      creation, code, e["letter"], keys, rnd)
+                return r, r[headers.index("お仕事番号")]
+            rows.append(work_guard.pick(make, code) if work_guard is not None else make()[0])
             title_counts[e["title"]] = title_counts.get(e["title"], 0) + 1
             content_counts[content] = content_counts.get(content, 0) + 1
             loc_records.append([t.company, t.category, p["loc"]["pref"], p["loc"]["city"], e["title"], stamp])
@@ -504,11 +509,12 @@ def output_name(first: g.Target, today: date) -> str:
 
 
 def run(base: Base, targets: list[g.Target], reader=None, seed=None, now: datetime | None = None,
-        today: date | None = None, continuation: dict | None = None) -> list[g.GroupResult]:
+        today: date | None = None, continuation: dict | None = None, guard=None) -> list[g.GroupResult]:
     """予約行を順に作る（hmRunFromConfig の生成部分）。エラーの行は、そのグループだけ作らずに続ける。
 
     募集番号の先頭が空の行は、同じ会社の前の行の続きの番号を使う（continuation：会社 → 次の募集番号。渡せば書き足す）。
     うまく作れた行の職種名・仕事内容は base の使用履歴に足す（同じ実行の後ろの行が避けるため。シートには書かない）。
+    guard（work_numbers.Guard）を渡すと、同じ日のお仕事番号と重ならないように画像（1枚目）・給与を選び直す。
     """
     now = now or datetime.now()
     today = today or now.date()
@@ -538,7 +544,8 @@ def run(base: Base, targets: list[g.Target], reader=None, seed=None, now: dateti
                 if t.count is not None and (t.count != t.count or t.count <= 0):
                     raise g.GenerateError(where + "原稿数が数値になっていません")
                 try:
-                    b = generate_batch(base, t, t.entry_prefix or continuation[t.company], reader, rnd, now, today)
+                    b = generate_batch(base, t, t.entry_prefix or continuation[t.company], reader, rnd, now, today,
+                                       guard)
                 except g.GenerateError as e:
                     raise g.GenerateError(where + str(e)) from None
                 continuation[t.company] = b.entry_no_end

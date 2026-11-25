@@ -41,3 +41,87 @@ def to_csv_bytes(items: list[tuple[str, str]]) -> bytes:
     for number, branch in items:
         lines.append(",".join(_q(v) for v in [number, branch] + [""] * (len(HEADERS) - 2)))
     return "".join(line + "\r\n" for line in lines).encode("cp932")
+
+
+# ---------------------------------------------------------------- 同じ日のお仕事番号を重ねない（2026-11-24 の Grit144811 から）
+
+class Guard:
+    """このパソコンで作ったお仕事番号を覚えておき、同じ番号を作らないようにする。
+
+    同じお仕事番号で掲載期間が重なる原稿は、ヒトマネが「同じ拠点（またはお仕事番号）で掲載期間が重複する原稿があります」
+    のエラーで取り込まない。2026-11-24 は条件が同じ行（夜勤あり・製造・高額）どうしで、給与・画像・市区町村がたまたま
+    そろい 1件入らなかった。お仕事番号には作成日（yyMMdd）が入るので、同じ作成日の番号だけ見ればよい。
+    記録は state/work_numbers_used.json（お仕事番号 → 募集番号）。古い日のものは読むときに捨てる。
+    """
+    FILE = "work_numbers_used.json"
+    KEEP_DAYS = 14
+
+    def __init__(self, used: dict | None = None, log=print):
+        self.used = dict(used or {})
+        self.log = log
+        self.notes: list[str] = []
+
+    @classmethod
+    def load(cls, today=None, log=print) -> "Guard":
+        import json
+        from datetime import date, datetime, timedelta
+
+        from . import config
+        path = config.STATE_DIR / cls.FILE
+        data = {}
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {}
+        oldest = (today or date.today()) - timedelta(days=cls.KEEP_DAYS)
+        keep = {}
+        for number, code in data.items():
+            parts = str(number).split("-")
+            try:
+                made = datetime.strptime(parts[1], "%y%m%d").date()
+            except (IndexError, ValueError):
+                continue
+            if made >= oldest:
+                keep[number] = code
+        return cls(keep, log)
+
+    def save(self) -> None:
+        import json
+
+        from . import config
+        config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+        (config.STATE_DIR / self.FILE).write_text(json.dumps(self.used, ensure_ascii=False, indent=0), encoding="utf-8")
+
+    def taken(self, number: str) -> bool:
+        return bool(number) and number in self.used
+
+    def add(self, number: str, code: str) -> None:
+        if number:
+            self.used[number] = code
+
+    def pick(self, make, code: str, tries: int = 50):
+        """make() で1件作り、お仕事番号が使用済みなら作り直す（make は呼ぶたびに画像・給与を選び直すもの）。
+
+        make() は (行, お仕事番号) を返す。作り直したときと、作り直しても重なりが外れなかったときは知らせる。"""
+        row, number = make()
+        if not self.taken(number):
+            self.add(number, code)
+            return row
+        first, other = number, self.used[number]
+        for _ in range(tries):
+            row, number = make()
+            if not self.taken(number):
+                self.add(number, code)
+                self._note(f"お仕事番号が同じ日の原稿（{other}）と重なったので、{code} の画像・給与を選び直しました："
+                           f"{first} → {number}")
+                return row
+        self.add(number, code)
+        self._note(f"⚠ {code} のお仕事番号が同じ日の原稿（{other}）と重なっています。選び直しても外れませんでした"
+                   f"（{number}）。このまま入稿すると、この1件はヒトマネで取り込めない場合があります")
+        return row
+
+    def _note(self, text: str) -> None:
+        self.notes.append(text)
+        if self.log:
+            self.log(text)

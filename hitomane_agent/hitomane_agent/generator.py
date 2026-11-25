@@ -571,7 +571,7 @@ def _entry_numbers(prefix: str):
 
 
 def generate_batch(bank: Bank, t: Target, entry_prefix: str, title_start: int, usage: Usage, rnd: random.Random,
-                   now: datetime, today: date) -> Batch:  # hmGenerateBatchNewFmt_
+                   now: datetime, today: date, work_guard=None) -> Batch:  # hmGenerateBatchNewFmt_
     content_category = _content_category(t.category)
     paired = bool(bank.paired_job_data.get(content_category))
     fixed_letter = ""
@@ -646,11 +646,16 @@ def generate_batch(bank: Bank, t: Target, entry_prefix: str, title_start: int, u
                 break
             unused = [c for c in contents if c not in used]  # hmPickUnusedContent_（使用履歴は読むだけ）
             content = rnd.choice(unused or contents)
-            image = rnd.choice(images) if images else ""
-            salary = rnd.choice(salaries) if salaries else None
-            work = rnd.choice(work_pool)
-            rows.append(build_row(bank, title, content, content_category, t, company, loc, image, salary, creation,
-                                  number(offset), fixed_letter, work, keys, rnd))
+            code = number(offset)
+
+            def make(loc=loc, title=title, content=content, code=code):  # 選び直すたびに画像・給与（と勤務時間）を引き直す
+                image = rnd.choice(images) if images else ""
+                salary = rnd.choice(salaries) if salaries else None
+                work = rnd.choice(work_pool)
+                r = build_row(bank, title, content, content_category, t, company, loc, image, salary, creation,
+                              code, fixed_letter, work, keys, rnd)
+                return r, r["お仕事番号"]
+            rows.append(work_guard.pick(make, code) if work_guard is not None else make()[0])
             title_counts[title] = title_counts.get(title, 0) + 1
             content_counts[content] = content_counts.get(content, 0) + 1
             remaining -= 1
@@ -733,7 +738,7 @@ def output_name(first: Target, today: date) -> str:
 
 def run(bank: Bank, usage: Usage, targets: list[Target], only_groups: set | None = None, seed=None,
         now: datetime | None = None, today: date | None = None, stop_on_error: bool = True,
-        continuation: dict | None = None) -> list[GroupResult]:
+        continuation: dict | None = None, guard=None) -> list[GroupResult]:
     """予約行を GAS と同じ順番（グループの出てきた順・グループ内の番号順）で生成する。
 
     募集番号の先頭が空の行は、同じ会社の直前の予約行の続きの番号を使う（グループをまたいでも引き継ぐ）。そのため、
@@ -741,6 +746,7 @@ def run(bank: Bank, usage: Usage, targets: list[Target], only_groups: set | None
     GAS はエラーの行で全体を止めるので、エラーが出たグループのあとのグループは作らない。
     stop_on_error=False なら、エラーのグループだけ飛ばして続ける（入稿予定表の行はそれぞれ別の予定のため）。
     continuation（会社 → 次の募集番号）を渡すと、それを引き継いで、作ったぶん書き足す（入稿予定表で使う）。
+    guard（work_numbers.Guard）を渡すと、同じ日のお仕事番号と重ならないように画像・給与を選び直す。
     """
     now = now or datetime.now()
     today = today or now.date()
@@ -773,7 +779,7 @@ def run(bank: Bank, usage: Usage, targets: list[Target], only_groups: set | None
                     continue
                 if build:
                     try:
-                        b = generate_batch(bank, t, prefix, title_index.get(key, 0), usage, rnd, now, today)
+                        b = generate_batch(bank, t, prefix, title_index.get(key, 0), usage, rnd, now, today, guard)
                     except GenerateError as e:
                         raise GenerateError(where + str(e)) from None
                     content_category = _content_category(t.category)

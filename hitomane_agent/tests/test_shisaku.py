@@ -3,7 +3,7 @@ import random
 import unittest
 from datetime import date, datetime
 
-from hitomane_agent import checks, generator as g, shisaku
+from hitomane_agent import checks, generator as g, shisaku, work_numbers
 from hitomane_agent.headers import NEW_FORMAT, OLD_FORMAT
 from tests import gen_samples as s
 
@@ -182,6 +182,44 @@ class TestTitle(unittest.TestCase):
     def test_too_long(self):
         _, [res] = run([target(end_word="あ" * 90)])
         self.assertIn("100文字を超えました", res.error)
+
+
+class TestWorkNumberGuard(unittest.TestCase):
+    """同じ日のお仕事番号を重ねない（2026-11-24 に Grit144811 が Grit142883 と重なり取り込めなかった）。"""
+
+    def first_number(self, **kw):
+        _, [res] = run([target(count=3, **kw)])
+        return as_dicts(res)[0]["お仕事番号"]
+
+    def test_redraws_and_tells(self):
+        taken = self.first_number(salary="25万")
+        notes = []
+        guard = work_numbers.Guard({taken: "Grit142883"}, log=notes.append)
+        _, [res] = run([target(count=3, salary="25万")], guard=guard)
+        rows = as_dicts(res)
+        self.assertNotEqual(rows[0]["お仕事番号"], taken)
+        self.assertEqual(len({r["お仕事番号"] for r in rows}), 3)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Grit142883", notes[0])
+        self.assertIn("CB100 の画像・給与を選び直しました", notes[0])
+        self.assertEqual(guard.used[rows[1]["お仕事番号"]], "CB101")  # 作った番号は覚える
+
+    def test_warns_when_it_cannot_redraw(self):
+        taken = self.first_number()  # 画像・給与の候補が1つずつなので選び直せない
+        notes = []
+        _, [res] = run([target(count=1)], guard=work_numbers.Guard({taken: "X1"}, log=notes.append))
+        self.assertEqual(as_dicts(res)[0]["お仕事番号"], taken)
+        self.assertEqual(len(notes), 1)
+        self.assertTrue(notes[0].startswith("⚠"))
+
+    def test_without_guard_unchanged(self):
+        self.assertEqual(self.first_number(salary="25万"), self.first_number(salary="25万"))
+
+    def test_load_save_keeps_recent_days(self):
+        g_ = work_numbers.Guard({"3-261124-1-1-5-1-2-a-b-c": "A", "3-261101-1-1-5-1-2-a-b-c": "B", "変": "C"})
+        g_.save()
+        loaded = work_numbers.Guard.load(date(2026, 11, 25))
+        self.assertEqual(loaded.used, {"3-261124-1-1-5-1-2-a-b-c": "A"})
 
 
 if __name__ == "__main__":
