@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ヒトマネ入稿ツール かんたんガイド</title>
+<style>
+  :root {
+    --ink: #1f2933; --sub: #52606d; --line: #d9e2ec; --bg: #f5f7fa; --card: #ffffff;
+    --blue: #2563eb; --blue-bg: #e8f0fe; --green: #15803d; --green-bg: #e7f6ec;
+    --orange: #c2410c; --orange-bg: #fdf0e6; --red: #b91c1c; --red-bg: #fdecec;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { width: 1240px; background: var(--bg); color: var(--ink);
+         font-family: "Yu Gothic UI", "Meiryo", "Hiragino Sans", sans-serif; font-size: 16px; line-height: 1.6; }
+  .page { padding: 40px 44px 36px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; border-bottom: 3px solid var(--ink); padding-bottom: 12px; margin-bottom: 24px; }
+  h1 { font-size: 34px; letter-spacing: .02em; }
+  header .meta { color: var(--sub); font-size: 15px; text-align: right; }
+  .lead { font-size: 18px; margin-bottom: 22px; }
+  .lead b { background: linear-gradient(transparent 60%, #fde68a 60%); }
+  h2 { font-size: 21px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
+  h2 .no { background: var(--ink); color: #fff; border-radius: 6px; font-size: 15px; padding: 1px 10px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-bottom: 18px; }
+
+  /* 流れ */
+  .flow { display: grid; grid-template-columns: 1fr 34px 1fr 34px 2.3fr 34px 1fr; align-items: stretch; }
+  .step { border-radius: 10px; padding: 14px 14px; }
+  .step .who { font-size: 13px; font-weight: bold; margin-bottom: 4px; }
+  .step .t { font-size: 18px; font-weight: bold; line-height: 1.35; margin-bottom: 6px; }
+  .step .d { font-size: 14px; color: var(--sub); }
+  .me { background: var(--blue-bg); border: 2px solid var(--blue); }
+  .me .who { color: var(--blue); }
+  .auto { background: var(--green-bg); border: 2px solid var(--green); }
+  .auto .who { color: var(--green); }
+  .arrow { display: flex; align-items: center; justify-content: center; font-size: 26px; color: var(--sub); }
+  .auto ol { list-style: none; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin-top: 4px; }
+  .auto li { background: #fff; border-radius: 6px; padding: 5px 8px; font-size: 14.5px; font-weight: bold; }
+  .auto li span { color: var(--sub); font-weight: normal; font-size: 12.5px; display: block; }
+
+  /* 2列 */
+  .cols { display: grid; grid-template-columns: 1.55fr 1fr; gap: 18px; }
+  .cols section { margin-bottom: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { width: 34%; white-space: nowrap; font-weight: bold; }
+  td .tag { display: inline-block; font-size: 12px; border-radius: 4px; padding: 0 6px; margin-right: 4px; }
+  .must { background: var(--red-bg); color: var(--red); }
+  .free { background: #eef2f6; color: var(--sub); }
+  .autoTag { background: var(--green-bg); color: var(--green); }
+
+  .result { border-radius: 8px; padding: 9px 12px; margin-bottom: 10px; font-size: 14.5px; }
+  .result code { font-family: inherit; font-weight: bold; display: block; margin-bottom: 2px; }
+  .ok { background: var(--green-bg); } .ok code { color: var(--green); }
+  .ng { background: var(--red-bg); } .ng code { color: var(--red); }
+  .time { font-size: 14.5px; }
+  .time b { font-size: 20px; }
+
+  .bottom { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px; }
+  .bottom section { margin-bottom: 0; }
+  ul.dots { list-style: none; }
+  ul.dots li { position: relative; padding-left: 18px; margin-bottom: 7px; font-size: 15px; }
+  ul.dots li::before { content: ""; position: absolute; left: 3px; top: 10px; width: 7px; height: 7px; border-radius: 50%; background: var(--sub); }
+  .warn h2 { color: var(--orange); }
+  .warn { border-color: #f3c9a5; }
+  .warn ul.dots li::before { background: var(--orange); }
+  .note { color: var(--sub); font-size: 13.5px; margin-top: 16px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>ヒトマネ入稿ツール かんたんガイド</h1>
+    <div class="meta">2026年11月時点の版です<br>これから改良していきます</div>
+  </header>
+
+  <p class="lead">スプレッドシートの<b>「入稿予定表」に今日の分を書いて、ボタンを1つ押すだけ</b>で、原稿づくりからヒトマネへの入稿まで、ツールが自動で進めます。</p>
+
+  <section>
+    <h2><span class="no">1</span>使い方の流れ</h2>
+    <div class="flow">
+      <div class="step me">
+        <div class="who">担当者</div>
+        <div class="t">入稿予定表に<br>今日の行を書く</div>
+        <div class="d">【AI用】ヒトマネの「入稿予定表」シート。ほとんどプルダウンで選べます</div>
+      </div>
+      <div class="arrow">▶</div>
+      <div class="step me">
+        <div class="who">担当者</div>
+        <div class="t">「今日の行を<br>すべて実行」を押す</div>
+        <div class="d">app.bat で操作画面を開き、「原稿を作る」タブにあるボタン</div>
+      </div>
+      <div class="arrow">▶</div>
+      <div class="step auto">
+        <div class="who">ツールが自動で（1行ずつ）</div>
+        <ol>
+          <li>① 原稿を作る<span>土台シートから、いつもの作り方で</span></li>
+          <li>② チェック<span>空欄や書けない記号がないか確認</span></li>
+          <li>③ お仕事番号を登録<span>お仕事情報管理へ先に入れる</span></li>
+          <li>④ ヒトマネに取り込む<span>募集管理へ CSV を取り込む</span></li>
+        </ol>
+      </div>
+      <div class="arrow">▶</div>
+      <div class="step me">
+        <div class="who">担当者</div>
+        <div class="t">実行結果の列を<br>見る</div>
+        <div class="d">入稿予定表のいちばん右の列に、ツールが結果を書きます</div>
+      </div>
+    </div>
+  </section>
+
+  <div class="cols">
+    <section>
+      <h2><span class="no">2</span>入稿予定表の書き方</h2>
+      <table>
+        <tr><th>実行日・会社・職種</th><td><span class="tag must">必須</span>実行日が「今日」の行だけ動きます</td></tr>
+        <tr><th>夜勤・通勤/入寮・雇用形態</th><td><span class="tag must">必須</span>夜勤はチェックを付けると「夜勤あり」</td></tr>
+        <tr><th>入稿ステータス</th><td><span class="tag must">必須</span>掲載 か 非掲載</td></tr>
+        <tr><th>作り方</th><td><span class="tag free">空欄＝通常</span>「施策」を選ぶと施策の土台で作ります</td></tr>
+        <tr><th>フォーマット</th><td>新FMT か 旧FMT（旧FMT は施策のときだけ）</td></tr>
+        <tr><th>原稿数</th><td><span class="tag free">空欄＝勤務地の数</span>作る件数</td></tr>
+        <tr><th>画像カテゴリー・給与パターン</th><td>給与は「基本」「高額」、施策は「25万」なども可</td></tr>
+        <tr><th>分類</th><td><span class="tag must">施策の 6重め・7軽め は必須</span></td></tr>
+        <tr><th>職種名選択・指定</th><td><span class="tag free">空欄＝自動</span>選ぶとその職種名だけで作ります</td></tr>
+        <tr><th>勤務地（都道府県・市区町村）</th><td><span class="tag free">空欄＝全勤務地からランダム</span></td></tr>
+        <tr><th>募集番号の先頭</th><td><span class="tag free">空欄＝前回の続き</span>会社で最初の行だけ必須</td></tr>
+        <tr><th>実行結果</th><td><span class="tag autoTag">ツールが書く</span>書き込まないでください</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2><span class="no">3</span>結果の見方</h2>
+      <div class="result ok"><code>入稿済み（11/24 13:58）700件 → GritMate株式会社</code>全部入りました。同じ行は、もう一度押しても入れ直しません。</div>
+      <div class="result ng"><code>❌ 作れませんでした／入稿が途中で止まりました</code>その行は入っていない（または一部だけ）です。<br>❌ の文をそのままコピーして、ツール担当に送ってください。</div>
+      <h2 style="margin-top:18px"><span class="no">4</span>かかる時間の目安</h2>
+      <p class="time">700件の行で<b>約15分</b>　1万件（16行）で<b>約3時間半</b></p>
+      <p class="time" style="color:var(--sub);margin-top:4px">実行中はパソコンを閉じたり、スリープにしたりしないでください。</p>
+    </section>
+  </div>
+
+  <div class="bottom">
+    <section>
+      <h2><span class="no">5</span>ツールが気をきかせてくれること</h2>
+      <ul class="dots">
+        <li>「▶」「✔」など Shift_JIS で書けない記号は、似た記号（■・○ など）に自動で置き換えます</li>
+        <li>同じ日のお仕事番号が重なりそうなときは、画像と給与を選び直し、画面にそう表示します</li>
+        <li>同じ会社・同じ勤務地で、同じ職種名を何度も使わないようにします</li>
+        <li>件数の上限（50,000件）を超えても止めずに入稿します。画面でお知らせだけします</li>
+      </ul>
+    </section>
+    <section class="warn">
+      <h2><span class="no">!</span>まだできないこと・注意</h2>
+      <ul class="dots">
+        <li><b>取り下げは自動ではしません。</b>「取り下げ」タブで条件と件数を確かめてから、担当者が実行します</li>
+        <li>使った職種名の記録は、ツールのパソコンの中だけです（土台の使用履歴シートには書きません）</li>
+        <li>エイトビィは社名入り画像がないため、施策では作れません</li>
+        <li>GAS や手作業で作った原稿とのお仕事番号の重なりまでは見ていません</li>
+      </ul>
+    </section>
+  </div>
+
+  <p class="note">困ったとき・こうしてほしいことがあるときは、ツール担当まで気軽に連絡してください。</p>
+</div>
+</body>
+</html>
